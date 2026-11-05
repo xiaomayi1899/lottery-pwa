@@ -1,6 +1,0 @@
-__pycache__/
-*.pyc
-data/cache_*.json
-qr.png
-logs/
-icons/src.jpg

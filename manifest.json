@@ -3,7 +3,7 @@
   "short_name": "彩票预测",
   "description": "双色球 / 大乐透 12 步概率模型与竞彩赔率分析 · 仅供个人学习与娱乐",
   "lang": "zh-CN",
-  "start_url": "./index.html?src=pwa",
+  "start_url": "./index.html?src=pwa&v=4",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",

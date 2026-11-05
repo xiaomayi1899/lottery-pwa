@@ -1,16 +1,17 @@
-/* sw.js — 离线缓存：应用壳 cache-first + 后台更新；接口 network-first + 运行时缓存兜底
-   注意：Service Worker 仅在 https 或 localhost 下注册（iOS 局域网 http 打开时自动跳过） */
-const VER = "lph-v3-20261105";
+/* sw.js — v4：HTML/脚本/样式「在线优先、离线回退缓存」（更新即时生效）；
+   图标/清单缓存优先；接口网络优先 + 运行时缓存兜底。
+   注意：Service Worker 仅在 https 或 localhost 下注册。 */
+const VER = "lph-v4-20261105";
 const SHELL_CACHE = "lph-shell-" + VER;
 const API_CACHE = "lph-api-" + VER;
 const SHELL = [
   "./",
   "./index.html",
-  "./css/style.css",
-  "./js/engine.js",
-  "./js/jc-core.js",
-  "./js/app.js",
-  "./data/snapshot.js",
+  "./css/style.css?v=4",
+  "./js/engine.js?v=4",
+  "./js/jc-core.js?v=4",
+  "./js/app.js?v=4",
+  "./data/snapshot.js?v=4",
   "./data/ssq.json",
   "./data/dlt.json",
   "./data/jc.json",
@@ -66,6 +67,27 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
+  // HTML / 脚本 / 样式：在线优先，离线才回退缓存 —— 保证线上更新即时到达
+  const isDoc = req.mode === "navigate" || url.pathname.endsWith(".html") || url.pathname === "/";
+  const isCode = url.pathname.startsWith("/js/") || url.pathname.startsWith("/css/") || /[?&]v=/.test(url.search);
+  if (isDoc || isCode) {
+    e.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok && res.type === "basic") {
+            const copy = res.clone();
+            caches.open(SHELL_CACHE).then((c) => c.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() =>
+          caches.match(req).then((hit) => hit || (isDoc ? caches.match("./index.html") : undefined))
+        )
+    );
+    return;
+  }
+
+  // 其余（图标 / 清单 / 数据兜底）：缓存优先 + 后台更新
   e.respondWith(
     caches.match(req).then((hit) => {
       const fetching = fetch(req).then((res) => {
