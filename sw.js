@@ -1,6 +1,6 @@
 /* sw.js — 离线缓存：应用壳 cache-first + 后台更新；接口 network-first + 运行时缓存兜底
    注意：Service Worker 仅在 https 或 localhost 下注册（iOS 局域网 http 打开时自动跳过） */
-const VER = "lph-v2-20261105";
+const VER = "lph-v3-20261105";
 const SHELL_CACHE = "lph-shell-" + VER;
 const API_CACHE = "lph-api-" + VER;
 const SHELL = [

@@ -4,6 +4,7 @@
 静态站点 + 官方开奖接口代理（双色球走福彩官网、大乐透走体彩官网、竞彩走竞彩网）。
 仅使用 Python 标准库；启动后局域网内手机可直接访问。
 """
+import datetime
 import hashlib
 import io
 import json
@@ -14,6 +15,7 @@ import ssl
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -353,6 +355,164 @@ def qr_png():
     return data
 
 
+# ---------- 基本面（竞彩排名 / 近期战绩 / 交锋，源：500 彩票网，电脑服务模式专用） ----------
+
+FUND_UA = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,*/*",
+    "Referer": "https://live.500.com/",
+}
+_fund_cache = {}
+FUND_LOCK = threading.Lock()
+
+
+def _http_text(url, referer=None, timeout=20):
+    h = dict(FUND_UA)
+    if referer:
+        h["Referer"] = referer
+    req = urllib.request.Request(url, headers=h)
+    with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
+        raw = r.read()
+    for enc in ("utf-8", "gbk", "gb18030"):
+        try:
+            return raw.decode(enc)
+        except Exception:
+            pass
+    return raw.decode("utf-8", "ignore")
+
+
+def _fund_cached(key, ttl, builder):
+    now = time.time()
+    with FUND_LOCK:
+        hit = _fund_cache.get(key)
+        if hit and hit[0] > now:
+            return hit[1]
+    val = builder()
+    with FUND_LOCK:
+        _fund_cache[key] = (now + ttl, val)
+    return val
+
+
+def _parse_jczq_row(html, num):
+    idx = html.find(">%s<" % num)
+    if idx < 0:
+        idx = html.find(num)
+    if idx < 0:
+        return None
+    start = html.rfind("<tr", 0, idx)
+    end = html.find("</tr>", idx)
+    chunk = html[start:end if end > 0 else idx + 4000]
+    fid = re.search(r'fid="(\d+)"', chunk)
+    ranks = re.findall(r"\[(\d+)\]", chunk)
+    teams = re.findall(r'liansai\.500\.com/team/(\d+)/"[^>]*>([^<]+)</a>', chunk)
+    hand = re.search(r'sp_rq">\((-?[\d.]+)\)', chunk)
+    tm = re.search(r"(\d{2}-\d{2} \d{2}:\d{2})", chunk)
+    league = re.search(r'zuqiu-(\d+)/"[^>]*>([^<]+)</a>', chunk)
+    if not fid or len(teams) < 2:
+        return None
+    return {
+        "fid": fid.group(1),
+        "homeTeamId": teams[0][0],
+        "homeName": teams[0][1].strip(),
+        "awayTeamId": teams[1][0],
+        "awayName": teams[1][1].strip(),
+        "rankHome": int(ranks[0]) if ranks else None,
+        "rankAway": int(ranks[1]) if len(ranks) > 1 else None,
+        "handicap": hand.group(1) if hand else None,
+        "time": tm.group(1) if tm else None,
+        "league": league.group(2) if league else None,
+    }
+
+
+def _parse_team_matches(html):
+    out = []
+    for m in re.finditer(r'<td class="td_time">([\d-]{10})</td>(.*?)(?=<td class="td_time">|</tbody>)', html, re.S):
+        date, seg = m.group(1), m.group(2)
+        comp = re.search(r'zuqiu-(\d+)/"[^>]*>([^<]+)</a>', seg)
+        ht = re.search(r'td_lteam">.*?team/(\d+)/"[^>]*>([^<]+)</a>', seg, re.S)
+        at = re.search(r'td_rteam">.*?team/(\d+)/"[^>]*>([^<]+)</a>', seg, re.S)
+        segt = re.sub(r"<[^>]+>", " ", seg)
+        sc = re.search(r"(\d+)\s*:\s*(\d+)", segt)
+        res = re.search(r"(胜|平|负)", segt)
+        if not (comp and ht and at):
+            continue
+        rec = {
+            "date": date,
+            "comp": comp.group(2),
+            "home": ht.group(2).strip(),
+            "away": at.group(2).strip(),
+            "res": res.group(1) if res else None,
+        }
+        if sc:
+            rec["hs"], rec["as"] = int(sc.group(1)), int(sc.group(2))
+        out.append(rec)
+    return out
+
+
+def _team_perspective(matches, team_name):
+    out = []
+    for m in matches:
+        if not m.get("res") or "hs" not in m:
+            continue
+        home = m["home"] == team_name
+        out.append({
+            "date": m["date"],
+            "comp": m["comp"],
+            "home": m["home"],
+            "away": m["away"],
+            "opp": m["away"] if home else m["home"],
+            "teamIsHome": home,
+            "teamGoals": m["hs"] if home else m["as"],
+            "oppGoals": m["as"] if home else m["hs"],
+            "score": "%d:%d" % (m["hs"], m["as"]),
+            "res": m["res"],
+        })
+    return out
+
+
+def _fetch_team_matches(team_id, name):
+    def build():
+        html = _http_text("https://liansai.500.com/team/%s/" % team_id, referer="https://live.500.com/")
+        return _team_perspective(_parse_team_matches(html), name)
+    val = _fund_cached("team:%s:%s" % (team_id, name), 1800, build)
+    return val if isinstance(val, list) else []
+
+
+def fetch_fund(date, num):
+    def build_for(d):
+        html = _http_text("https://live.500.com/jczq.php?e=%s" % d, referer="https://live.500.com/")
+        return _parse_jczq_row(html, num)
+
+    def build():
+        row = None
+        used = None
+        base = datetime.datetime.strptime(date, "%Y-%m-%d")
+        # 500 按竞彩日分组：凌晨场编号挂在前一天页面，故前后各试一天
+        for delta in (0, -1, 1):
+            d = (base + datetime.timedelta(days=delta)).strftime("%Y-%m-%d")
+            row = _fund_cached("row:%s:%s" % (d, num), 600, lambda d=d: build_for(d))
+            if isinstance(row, dict) and row:
+                used = d
+                break
+        if not row:
+            return {"found": False, "reason": "当日前后赛程页均未找到该编号场次"}
+        home_matches = _fetch_team_matches(row["homeTeamId"], row["homeName"])
+        away_matches = _fetch_team_matches(row["awayTeamId"], row["awayName"])
+        h2h = [m for m in home_matches if m.get("opp") == row["awayName"]]
+        return {
+            "found": True,
+            "fid": row["fid"],
+            "league": row["league"],
+            "handicap": row["handicap"],
+            "time": row["time"],
+            "matchDateOn500": used,
+            "home": {"name": row["homeName"], "rank": row["rankHome"], "matches": home_matches},
+            "away": {"name": row["awayName"], "rank": row["rankAway"], "matches": away_matches},
+            "h2h": h2h,
+        }
+    return _fund_cached("fund:%s:%s" % (date, num), 600, build)
+
+
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
@@ -438,6 +598,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, body, ctype)
             except Exception as e:
                 self._send_json({"error": str(e)}, 502)
+            return
+        if path == "/api/fund":
+            md = re.search(r"(?:^|&)date=(\d{4}-\d{2}-\d{2})", qs)
+            mn = re.search(r"(?:^|&)num=([^&]{2,24})", qs)
+            if not (md and mn):
+                self._send_json({"found": False, "reason": "参数缺失"}, 400)
+                return
+            num = urllib.parse.unquote(mn.group(1))
+            try:
+                self._send_json(fetch_fund(md.group(1), num))
+            except Exception as e:
+                self._send_json({"found": False, "reason": str(e)[:120]}, 502)
             return
         if path == "/qr.png":
             data = qr_png()

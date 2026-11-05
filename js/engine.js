@@ -393,6 +393,245 @@
     const tb=topN(gd.bc,c.bk,i=>-(gd.bc[i]-Eb));
     return {lines:L,cand:{f:new Set(tf),b:new Set(tb)},why:"均值回归对照组(同样无统计效力)"};}
 
+  /* ---------- 新增模型 13~16（与原 12 步并列，参与加权投票） ---------- */
+
+  function m13(gd){const c=gd.cfg;const L=[];
+    L.push("模型: 指数衰减加权频率(半衰期 30 期)——近期出现权重更大");
+    L.push("⚠ 仍是频率统计,近期偏好无预测力,仅供对照");
+    const half=30;const D=gd.D;
+    const wf=new Array(c.fn+1).fill(0),wb=new Array(c.bn+1).fill(0);
+    for(let t=0;t<D;t++){const w=Math.pow(0.5,(D-1-t)/half);
+      for(const x of gd.fSets[t])wf[x]+=w;
+      for(const x of gd.bSets[t])wb[x]+=w;}
+    const tf=topN(wf,c.fk,i=>wf[i]),tb=topN(wb,c.bk,i=>wb[i]);
+    return {lines:L,cand:{f:new Set(tf),b:new Set(tb)},why:"近期加权热度 Top(时间衰减)"};}
+
+  function m14(gd){const c=gd.cfg;const L=[];
+    L.push("模型: 形态匹配——从历史(和值带/奇偶/大小)经验分布采样目标形态,在后验权重下选号");
+    const rng=mulberry32(SEED+14);
+    const D=gd.D,half=Math.floor(c.fn/2);
+    const lo=c.fk*(c.fk+1)/2,hi=c.fk*(2*c.fn-c.fk+1)/2,band=(hi-lo+1)/5;
+    const forms=gd.draws.map(d=>{const f=d.nums.slice(0,c.fk),b=d.nums.slice(c.fk);
+      const s=f.reduce((a,x)=>a+x,0);
+      return {band:Math.max(0,Math.min(4,Math.floor((s-lo)/band))),
+        odd:f.filter(x=>x%2===1).length,low:f.filter(x=>x<=half).length,
+        bodd:b.filter(x=>x%2===1).length};});
+    const target=forms[Math.floor(rng()*D)];
+    L.push("采样形态: 和值第"+(target.band+1)+"档, 奇偶 "+target.odd+":"+(c.fk-target.odd)+
+      ", 大小 "+target.low+":"+(c.fk-target.low));
+    const order=topN(gd.thetaF,14,i=>gd.thetaF[i]);
+    let no=target.odd,ne=c.fk-target.odd,nl=target.low,nb=c.fk-target.low;
+    const pick=[];
+    for(const i of order){
+      if(pick.length>=c.fk)break;
+      const odd=i%2===1,lowc=i<=half;
+      if(((odd&&no>0)||(!odd&&ne>0))&&((lowc&&nl>0)||(!lowc&&nb>0))){
+        pick.push(i);if(odd)no--;else ne--;if(lowc)nl--;else nb--;}}
+    for(const i of order){
+      if(pick.length>=c.fk)break;
+      if(!pick.includes(i))pick.push(i);}
+    // 和值落带修正：用未选号里的最大后验者替换偏离最远的号
+    const sum=pick.reduce((a,b)=>a+b,0);
+    const bandMid=lo+(target.band+0.5)*band;
+    if(sum<lo||sum>hi){
+      const cand2=order.filter(i=>!pick.includes(i));
+      for(const ni of cand2){
+        if(sum>=lo&&sum<=hi)break;
+        let wi=0,wd=1e9;
+        for(const p of pick){const ns=sum-p+ni;
+          if(Math.abs(ns-bandMid)<wd){wd=Math.abs(ns-bandMid);wi=p;}}
+        const idx=pick.indexOf(wi);pick[idx]=ni;sum+=ni-wi;}}
+    let tf=topN(gd.thetaB,c.bk+2,i=>gd.thetaB[i]);
+    let tb;
+    if(c.bk===1)tb=[tf[0]];
+    else{tb=null;
+      for(let i=0;i<tf.length&&!tb;i++)for(let j=i+1;j<tf.length&&!tb;j++)
+        if(((tf[i]%2)+(tf[j]%2))===target.bodd)tb=[tf[i],tf[j]];
+      if(!tb)tb=tf.slice(0,c.bk);}
+    return {lines:L,cand:{f:new Set(pick),b:new Set(tb)},why:"历史形态经验采样+后验选号"};}
+
+  function m15(gd){const c=gd.cfg;const L=[];
+    L.push("模型: 共现聚类——同期高频共现的号码抱团(与相关分散模型方向相反)");
+    const co=new Map();
+    function addCo(sets,N,k){
+      for(const s of sets){const a=[...s];
+        for(let x=0;x<a.length;x++)for(let y=x+1;y<a.length;y++){
+          const key=Math.min(a[x],a[y])+"_"+Math.max(a[x],a[y]);
+          co.set(key,(co.get(key)||0)+1);}}}
+    addCo(gd.fSets);addCo(gd.bSets);
+    function cluster(sets,N,k,seedArr){
+      const seed=topN(seedArr,1,i=>seedArr[i])[0];
+      const picked=[seed];
+      while(picked.length<k){let bi=-1,bv=-1;
+        for(let i=1;i<=N;i++){
+          if(picked.includes(i))continue;
+          let m=0;
+          for(const j of picked){const key=Math.min(i,j)+"_"+Math.max(i,j);m+=(co.get(key)||0);}
+          m/=picked.length;
+          if(m>bv-1e-12||(Math.abs(m-bv)<1e-12&&seedArr[i]>seedArr[bi])){bv=m;bi=i;}}
+        picked.push(bi);}
+      return picked;}
+    const tf=cluster(gd.fSets,c.fn,c.fk,gd.fc);
+    const tb=cluster(gd.bSets,c.bn,c.bk,gd.bc);
+    L.push("种子=出现最多的号,逐步加入平均共现次数最高的号");
+    return {lines:L,cand:{f:new Set(tf),b:new Set(tb)},why:"高频共现抱团(聚类视角)"};}
+
+  function m16(gd,simF,simB){const c=gd.cfg;const L=[];
+    L.push("模型: 模拟退火——在「模拟命中+和值贴近+分散度」合成适应度上迭代优化 300 轮");
+    const rng=mulberry32(SEED+16);
+    const S=Math.min(400,simF.length);
+    function fit(set){
+      let hit=0;for(let s=0;s<S;s++){for(const x of set)if(simF[s].has(x))hit++;}
+      hit/=(S*c.fk);
+      const sum=set.reduce((a,b)=>a+b,0),mid=c.fk*(c.fn+1)/2;
+      const formF=Math.exp(-Math.pow(sum-mid,2)/(2*Math.pow(c.fn*0.6,2)));
+      const sorted=[...set].sort((a,b)=>a-b);let gap=0;
+      for(let i=1;i<sorted.length;i++)gap+=sorted[i]-sorted[i-1]-1;
+      const disp=Math.min(1,gap/(c.fn/2));
+      return hit*(c.fk*c.fk/c.fn)*0.5+formF*0.3+disp*0.2;}
+    let cur=topN(gd.thetaF,c.fk,i=>gd.thetaF[i]);
+    let best=cur.slice(),bf=fit(cur),T=1.0;
+    for(let it=0;it<300;it++){
+      const cand2=cur.slice();
+      const nmut=1+((rng()*2)|0);
+      for(let k=0;k<nmut;k++){
+        const pos=(rng()*c.fk)|0;
+        let nv=1+((rng()*c.fn)|0);
+        while(cand2.includes(nv))nv=1+((rng()*c.fn)|0);
+        cand2[pos]=nv;}
+      const f=fit(cand2);
+      if(f>bf||rng()<Math.exp((f-bf)/Math.max(T,1e-9))){cur=cand2;
+        if(f>bf){bf=f;best=cand2.slice();}}
+      T*=0.985;}
+    L.push("适应度=0.5×模拟命中(相对随机基准)+0.3×和值贴近+0.2×分散度");
+    const tb=topN(gd.thetaB,c.bk,i=>gd.thetaB[i]);
+    return {lines:L,cand:{f:new Set(best),b:new Set(tb)},why:"元启发式多目标优化"};}
+
+  /* ---------- 逐期回测加权：近 30 期每期用「此前 100 期」训练,按实际命中/随机基准定权 ---------- */
+  const MODEL_NAMES={m1:"经验众数",m2:"小奖覆盖",m3:"贝叶斯后验",m4:"后验抽样",m5:"遗漏回补",
+    m6:"卡方残差",m7:"相关分散",m8:"马尔科夫",m9:"蒙特卡洛覆盖",m10:"期望收益",
+    m11:"凯利风险",m12:"均值回归对照",m13:"衰减热度",m14:"形态匹配",m15:"共现聚类",m16:"模拟退火"};
+
+  function backtest(key){
+    const draws=DATA[key],cfg=GAMES[key];
+    const total=draws.length;
+    let N=Math.min(30,total-WINDOW);
+    if(N<5)N=Math.max(0,N);
+    const defs=[["m1",gd=>m1(gd)],["m2",gd=>m2(gd)],["m3",gd=>m3(gd)],["m4",gd=>m4(gd)],
+      ["m5",gd=>m5(gd)],["m6",gd=>m6(gd)],["m7",gd=>m7(gd)],["m8",gd=>m8(gd)],
+      ["m10",gd=>m10(gd)],["m12",gd=>m12(gd)],["m13",gd=>m13(gd)],["m14",gd=>m14(gd)],["m15",gd=>m15(gd)]];
+    const baseF=cfg.fk*cfg.fk/cfg.fn, baseB=cfg.bk*cfg.bk/cfg.bn;
+    const raw={};
+    for(const d of defs)raw[d[0]]=1;
+    if(N>=5){
+      const acc={};for(const d of defs)acc[d[0]]={f:0,b:0,n:0};
+      const start=Math.max(WINDOW,total-N);
+      for(let t=start;t<total;t++){
+        const gd=makeGD(cfg,draws.slice(t-WINDOW,t));
+        const actual=draws[t].nums;
+        const fA=new Set(actual.slice(0,cfg.fk)),bA=new Set(actual.slice(cfg.fk));
+        for(const d of defs){
+          try{const cand=d[1](gd);
+            let hf=0;for(const x of cand.cand.f)if(fA.has(x))hf++;
+            let hb=0;for(const x of cand.cand.b)if(bA.has(x))hb++;
+            acc[d[0]].f+=hf;acc[d[0]].b+=hb;acc[d[0]].n++;}catch(e){}}}
+      for(const d of defs){const a=acc[d[0]];
+        if(a.n>0){const avgF=a.f/a.n,avgB=a.b/a.n;
+          raw[d[0]]=Math.max(0.3,((avgF/baseF)+(avgB/baseB))/2);
+          d.avgF=avgF;d.avgB=avgB;}
+        else raw[d[0]]=1;}}
+    const sumW=Object.values(raw).reduce((a,b)=>a+b,0);
+    const rows=Object.keys(raw).map(k=>({key:k,name:MODEL_NAMES[k],w:raw[k]/sumW,
+      ratio:raw[k],avgF:defs.find(d=>d[0]===k)?(defs.find(d=>d[0]===k).avgF||null):null,
+      avgB:defs.find(d=>d[0]===k)?(defs.find(d=>d[0]===k).avgB||null):null}));
+    rows.sort((a,b)=>b.w-a.w);
+    return {rows:rows,baseF:baseF,baseB:baseB,n:N,
+      note:"蒙特卡洛/凯利/退火等重模型不参与回测,按中性权重计;历史回测不代表未来"};
+  }
+
+  /* ---------- 策略五注：同一批模型结果的不同合成视角 ---------- */
+  function formConstrainedPick(scoreF,cfg){
+    const half=Math.floor(cfg.fn/2);
+    const order=[];for(let i=1;i<=cfg.fn;i++)order.push(i);
+    order.sort((a,b)=>scoreF[b]-scoreF[a]);
+    const lo=cfg.fk*(cfg.fk+1)/2,hi=cfg.fk*(2*cfg.fn-cfg.fk+1)/2;
+    const sL=lo+0.35*(hi-lo),sH=lo+0.65*(hi-lo);
+    const oL=Math.ceil(cfg.fk*0.4),oH=Math.floor(cfg.fk*0.6);
+    let best=null,bw=-1;
+    (function rec(s,cur){
+      if(cur.length===cfg.fk){
+        const sm=cur.reduce((a,b)=>a+b,0);
+        const odd=cur.filter(x=>x%2===1).length;
+        const low=cur.filter(x=>x<=half).length;
+        if(sm>=sL&&sm<=sH&&odd>=oL&&odd<=oH&&low>=Math.ceil(cfg.fk*0.4)&&low<=Math.floor(cfg.fk*0.6)){
+          const w=cur.reduce((a,x)=>a+scoreF[x],0);
+          if(w>bw){bw=w;best=cur.slice();}}
+        return;}
+      for(let i=s;i<Math.min(order.length,12);i++){cur.push(order[i]);rec(i+1,cur);cur.pop();}})(0,[]);
+    if(best)return best.sort((a,b)=>a-b);
+    return order.slice(0,cfg.fk).sort((a,b)=>a-b);}
+
+  function dispersionPick(gd,scoreF,cfg,zone){
+    const sets=zone==="f"?gd.fSets:gd.bSets;
+    const N=zone==="f"?cfg.fn:cfg.bn;
+    const k=zone==="f"?cfg.fk:cfg.bk;
+    const cols=[];
+    for(let i=1;i<=N;i++){const col=new Array(sets.length);
+      for(let t=0;t<sets.length;t++)col[t]=sets[t].has(i)?1:0;cols.push(col);}
+    const means=cols.map(col=>col.reduce((a,b)=>a+b,0)/col.length);
+    const cen=cols.map((col,ci)=>col.map(v=>v-means[ci]));
+    const norms=cen.map(c2=>Math.sqrt(c2.reduce((a,v)=>a+v*v,0)));
+    const cm=new Map();
+    for(let a=0;a<N;a++)for(let b=a+1;b<N;b++){
+      let dot=0;const ca=cen[a],cb=cen[b];
+      for(let t=0;t<ca.length;t++)dot+=ca[t]*cb[t];
+      const rr=norms[a]*norms[b]>0?dot/(norms[a]*norms[b]):0;
+      cm.set((a+1)+"_"+(b+1),rr);}
+    const order=[];for(let i=1;i<=N;i++)order.push(i);
+    order.sort((a,b)=>scoreF[b]-scoreF[a]);
+    const picked=[order[0]];
+    while(picked.length<k){let bi=-1,bv=1e9;
+      for(let i=1;i<=N;i++){
+        if(picked.includes(i))continue;
+        let m=0;
+        for(const j of picked){const key=Math.min(i,j)+"_"+Math.max(i,j);m+=Math.abs(cm.get(key)||0);}
+        m/=picked.length;
+        if(m<bv-1e-12||(Math.abs(m-bv)<1e-12&&scoreF[i]>scoreF[bi])){bv=m;bi=i;}}
+      picked.push(bi);}
+    return picked.sort((a,b)=>a-b);}
+
+  function buildSets(cfg,gd,models,final){
+    const scoreF=new Array(cfg.fn+1).fill(0),scoreB=new Array(cfg.bn+1).fill(0);
+    for(const m of models){
+      for(const x of m.cand.f)scoreF[x]+=m.w;
+      for(const x of m.cand.b)scoreB[x]+=m.w;}
+    const sets=[{tag:"主推 · 加权投票",f:final.f.slice(),b:final.b.slice()}];
+    const rng2=mulberry32(SEED+21);
+    const f2=postDraw(scoreF.slice(1).map(v=>v+0.15),cfg.fk,rng2).map(x=>x+1);
+    const b2=postDraw(scoreB.slice(1).map(v=>v+0.15),cfg.bk,rng2).map(x=>x+1);
+    sets.push({tag:"加权采样 · 按综合得分",f:f2.sort((a,b)=>a-b),b:b2.sort((a,b)=>a-b)});
+    sets.push({tag:"保守 · 形态约束下取最高综合分",f:formConstrainedPick(scoreF,cfg),
+      b:topN(scoreB,cfg.bk,i=>scoreB[i]).sort((a,b)=>a-b)});
+    sets.push({tag:"分散 · 低相关组合",f:dispersionPick(gd,scoreF,cfg,"f"),
+      b:dispersionPick(gd,scoreB,cfg,"b")});
+    const rng3=mulberry32(SEED+25);
+    const f5=postDraw(new Array(cfg.fn).fill(1),cfg.fk,rng3).map(x=>x+1);
+    const b5=postDraw(new Array(cfg.bn).fill(1),cfg.bk,rng3).map(x=>x+1);
+    sets.push({tag:"随机对照 · 纯随机",f:f5.sort((a,b)=>a-b),b:b5.sort((a,b)=>a-b)});
+    const seen=new Set();
+    for(const s of sets){let key=fmtS(new Set(s.f))+"|"+fmtS(new Set(s.b));
+      while(seen.has(key)){
+        const order=[];for(let i=1;i<=cfg.fn;i++)order.push(i);
+        order.sort((a,b)=>scoreF[b]-scoreF[a]);
+        for(const cand of order){
+          if(!s.f.includes(cand)){
+            let wi=0;for(const p of s.f)if(scoreF[p]<scoreF[wi]||wi===0)wi=p;
+            s.f[s.f.indexOf(wi)]=cand;break;}}
+        s.f.sort((a,b)=>a-b);s.b.sort((a,b)=>a-b);
+        key=fmtS(new Set(s.f))+"|"+fmtS(new Set(s.b));}
+      seen.add(key);}
+    return sets;}
+
   function analyzeGame(key){
     const cfg=GAMES[key];
     const stock=DATA[key].length;
@@ -404,27 +643,39 @@
     const rng=mulberry32(SEED);
     const sim=buildSim(gd,2000,rng);
     const pool=candPool(gd,mulberry32(SEED+9));
+    const bt=backtest(key);
+    const raw={};
+    for(const r of bt.rows)raw[r.key]=Math.max(0.3,r.ratio);
+    for(const k of ["m9","m11","m16"])raw[k]=1;
+    const sumW=Object.values(raw).reduce((a,b)=>a+b,0);
+    const wMap={};for(const k of Object.keys(raw))wMap[k]=raw[k]/sumW;
     const steps=[
-      ["步骤一 · 一等奖概率(超几何分布)",function(){return m1(gd);}],
-      ["步骤二 · 奖级概率(多元超几何分布)",function(){return m2(gd);}],
-      ["步骤三 · 前区热度(贝叶斯后验估计)",function(){return m3(gd);}],
-      ["步骤四 · 后区热度(Dirichlet-多项共轭)",function(){return m4(gd);}],
-      ["步骤五 · 遗漏分析(几何分布与生存函数)",function(){return m5(gd);}],
-      ["步骤六 · 号码独立性(卡方检验)",function(){return m6(gd);}],
-      ["步骤七 · 号码相关性(皮尔逊相关系数)",function(){return m7(gd);}],
-      ["步骤八 · 时间演化(马尔科夫链)",function(){return m8(gd);}],
-      ["步骤九 · 组合覆盖(蒙特卡洛模拟)",function(){return m9(gd,sim[0],sim[1],pool);}],
-      ["步骤十 · 期望收益(数学期望与方差)",function(){return m10(gd);}],
-      ["步骤十一 · 风险管理(凯利准则与破产概率)",function(){return m11(gd,sim[0],sim[1],pool);}],
-      ["步骤十二 · 极限定理(大数定律与理性购彩)",function(){return m12(gd);}],
+      ["步骤一 · 一等奖概率(超几何分布)","m1",function(){return m1(gd);}],
+      ["步骤二 · 奖级概率(多元超几何分布)","m2",function(){return m2(gd);}],
+      ["步骤三 · 前区热度(贝叶斯后验估计)","m3",function(){return m3(gd);}],
+      ["步骤四 · 后区热度(Dirichlet-多项共轭)","m4",function(){return m4(gd);}],
+      ["步骤五 · 遗漏分析(几何分布与生存函数)","m5",function(){return m5(gd);}],
+      ["步骤六 · 号码独立性(卡方检验)","m6",function(){return m6(gd);}],
+      ["步骤七 · 号码相关性(皮尔逊相关系数)","m7",function(){return m7(gd);}],
+      ["步骤八 · 时间演化(马尔科夫链)","m8",function(){return m8(gd);}],
+      ["步骤九 · 组合覆盖(蒙特卡洛模拟)","m9",function(){return m9(gd,sim[0],sim[1],pool);}],
+      ["步骤十 · 期望收益(数学期望与方差)","m10",function(){return m10(gd);}],
+      ["步骤十一 · 风险管理(凯利准则与破产概率)","m11",function(){return m11(gd,sim[0],sim[1],pool);}],
+      ["步骤十二 · 极限定理(大数定律与理性购彩)","m12",function(){return m12(gd);}],
+      ["步骤十三 · 衰减热度(指数加权频率)","m13",function(){return m13(gd);}],
+      ["步骤十四 · 形态匹配(和值/奇偶/大小采样)","m14",function(){return m14(gd);}],
+      ["步骤十五 · 共现聚类(高频抱团)","m15",function(){return m15(gd);}],
+      ["步骤十六 · 模拟退火(多目标合成优化)","m16",function(){return m16(gd,sim[0],sim[1]);}],
     ];
-    const votesF=new Map(),votesB=new Map();const cands=[];
+    const votesF=new Map(),votesB=new Map();const cands=[];const modelResults=[];
     for(const st of steps){
-      const r=st[1]();
-      for(const x of r.cand.f)votesF.set(x,(votesF.get(x)||0)+1);
-      for(const x of r.cand.b)votesB.set(x,(votesB.get(x)||0)+1);
+      const r=st[2]();
+      const w=wMap[st[1]]||0;
+      for(const x of r.cand.f)votesF.set(x,(votesF.get(x)||0)+w);
+      for(const x of r.cand.b)votesB.set(x,(votesB.get(x)||0)+w);
       out.sections.push({title:st[0],lines:r.lines,cand:r.cand,why:r.why});
-      cands.push(r.cand);}
+      cands.push(r.cand);
+      modelResults.push({key:st[1],cand:r.cand,w:w});}
     function rankTop(votes,theta,N,k){
       const idx=[];for(let i=1;i<=N;i++)idx.push(i);
       idx.sort(function(a,b){
@@ -435,11 +686,13 @@
       return idx.slice(0,k).sort(function(a,b){return a-b;});}
     out.final={f:rankTop(votesF,gd.thetaF,cfg.fn,cfg.fk),
                b:rankTop(votesB,gd.thetaB,cfg.bn,cfg.bk)};
-    out.votes={f:out.final.f.map(i=>pad2(i)+"×"+(votesF.get(i)||0)).join("  "),
-               b:out.final.b.map(i=>pad2(i)+"×"+(votesB.get(i)||0)).join("  ")};
+    out.votes={f:out.final.f.map(i=>pad2(i)+" "+Math.round((votesF.get(i)||0)*100)).join("  "),
+               b:out.final.b.map(i=>pad2(i)+" "+Math.round((votesB.get(i)||0)*100)).join("  ")};
     out.votesF={};votesF.forEach(function(v,k){out.votesF[k]=v;});
     out.votesB={};votesB.forEach(function(v,k){out.votesB[k]=v;});
-    out.gd={fc:gd.fc,bc:gd.bc,fom:gd.fom,bom:gd.bom}; // 频率与遗漏，供统计图使用
+    out.gd={fc:gd.fc,bc:gd.bc,fom:gd.fom,bom:gd.bom};
+    out.weights={rows:bt.rows,baseF:bt.baseF,baseB:bt.baseB,n:bt.n,note:bt.note};
+    out.sets=buildSets(cfg,gd,modelResults,out.final); // 频率与遗漏，供统计图使用
     const combo=new Map();
     for(const c2 of cands){const k=fmtS(c2.f)+"|"+fmtS(c2.b);combo.set(k,(combo.get(k)||0)+1);}
     let mx=0,mk="";

@@ -205,6 +205,34 @@
     return h + "</div>";
   }
 
+  function setsCardHTML(g) {
+    const st = state[g];
+    if (!st.result || !st.result.sets) return "";
+    let h = '<div class="card"><div class="eyebrow">策略五注 · 同一批模型的不同合成视角</div>';
+    st.result.sets.forEach((s, i) => {
+      h += '<div class="pr-row"><div class="pr-l"><span>' + (i + 1) + ". " + esc(s.tag) + "</span></div>" +
+        '<div class="balls" style="margin:4px 0 2px">' + gameBalls(g, s.f.concat(s.b), "xs") + "</div></div>";
+    });
+    h += '<div class="hint" style="margin-top:8px">五注只是同一信息的不同组合方式，不改变中奖概率；随机对照那注与其他四注的期望完全相同。</div></div>';
+    return h;
+  }
+
+  function weightsCardHTML(g) {
+    const st = state[g];
+    const w = st.result && st.result.weights;
+    if (!w || !w.rows) return "";
+    const maxW = Math.max.apply(null, w.rows.map((r) => r.w));
+    let h = '<div class="card"><div class="eyebrow">回测加权 · 近 ' + w.n + ' 期逐期走前回测</div>';
+    h += '<div class="hint" style="margin-bottom:8px">基准 = 随机期望（前 ' + w.baseF.toFixed(2) + " 个 / 后 " + w.baseB.toFixed(2) + " 个）；命中高于基准的模型话语权更大。</div>";
+    for (const r of w.rows) {
+      const tag = r.avgF != null ? ' <span class="src-tag">均命中 ' + r.avgF.toFixed(2) + "</span>" : ' <span class="src-tag">中性权重</span>';
+      h += '<div class="pr-row"><div class="pr-l"><span>' + esc(r.name) + tag + '</span><b class="num">' + (r.w * 100).toFixed(1) + "%</b></div>" +
+        '<div class="bar"><i style="width:' + (r.w / maxW * 100).toFixed(0) + '%"></i></div></div>';
+    }
+    h += '<div class="hint" style="margin-top:8px">' + esc(w.note) + "。回测加权只是历史统计，不改变每期开奖的随机性。</div></div>";
+    return h;
+  }
+
   function statsCardHTML(g) {
     const cfg = Engine.GAMES[g];
     const m = state[g].metric;
@@ -223,7 +251,7 @@
     return '<div class="banner">' +
       '<div class="tag">模型合成推荐 · ' + esc(r.name) + "</div>" +
       '<div class="pick">' + gameBalls(g, r.final.f.concat(r.final.b)) + "</div>" +
-      '<div class="votes num">前区 ' + esc(r.votes.f) + "<br>后区 " + esc(r.votes.b) + "</div>" +
+      '<div class="votes num">前区加权得票(×100) ' + esc(r.votes.f) + "<br>后区加权得票(×100) " + esc(r.votes.b) + "</div>" +
       (r.consensus ? '<div class="consensus">' + esc(r.consensus) + "</div>" : "") +
       '<div class="upto">截至第 ' + esc(r.upto.issue) + " 期（" + esc(r.upto.date) + " 开奖）· 分析最近 " + r.upto.count +
       " 期 · 库存 " + r.upto.stock.toLocaleString("en-US") + " 期 · 计算 " + r.ms + "ms<br>" +
@@ -283,8 +311,12 @@
       '<div class="hint">与桌面版「双彩智投」同构：超几何 / 贝叶斯 / 卡方 / 马尔科夫 / 蒙特卡洛 / 凯利 / 大数定律；只用最近 100 期窗口，随机序列一致、结果同构。</div>' +
       '<div class="btn-row"><button class="btn ghost" data-act="refresh">更新数据</button>' +
       '<button class="btn primary" data-act="go" id="' + g + '-go">' + (st.result ? "重新分析" : "开始分析") + "</button></div>" +
-      '<div class="hint" id="' + g + '-prog" style="margin-top:8px;min-height:16px">' + (st.running ? "12 步模型与蒙特卡洛计算中（约数秒）…" : "") + "</div></div>";
-    if (st.result) h += bannerHTML(g);
+      '<div class="hint" id="' + g + '-prog" style="margin-top:8px;min-height:16px">' + (st.running ? "16 个模型 + 近 30 期回测计算中（约数秒）…" : "") + "</div></div>";
+    if (st.result) {
+      h += bannerHTML(g);
+      h += setsCardHTML(g);
+      h += weightsCardHTML(g);
+    }
     h += statsCardHTML(g);
     if (st.result) h += stepsHTML(g);
     h += histHTML(g);
@@ -299,7 +331,7 @@
     st.running = true;
     const btn = $("#" + g + "-go"), prog = $("#" + g + "-prog");
     if (btn) btn.disabled = true;
-    if (prog) prog.textContent = "12 步模型与蒙特卡洛计算中（约数秒），请稍候…";
+    if (prog) prog.textContent = "16 个模型 + 近 30 期逐期回测计算中（约数秒），请稍候…";
     await new Promise((r) => setTimeout(r, 50));
     try {
       const t0 = performance.now();
@@ -427,9 +459,13 @@
     const el = $("#page-jc");
     const jst = state.jc;
     let h = '<div class="card"><div class="eyebrow">竞彩足球 · 官方在售场次</div>' +
-      '<div class="hint">点任意场次查看：去水市场概率、跨玩法互证、泊松比分分布、价值与 Kelly。' +
+      '<div class="hint">点任意场次查看：去水概率、跨玩法互证、Dixon-Coles 比分分布、赔率变动、基本面、价值与 Kelly。' +
       (jst.ts ? "赔率更新于 " + fmtTime(jst.ts) + "。" : "") + "</div>" +
       '<div class="btn-row"><button class="btn ghost" data-act="refresh">刷新赛程</button></div></div>';
+    if (jst.list.length) {
+      const pl = buildParlay();
+      if (pl) h += parlayHTML(pl);
+    }
     if (jst.loading && !jst.list.length) {
       h += '<div class="skel tall"></div><div class="skel tall"></div><div class="skel tall"></div>';
     } else if (!jst.list.length) {
@@ -446,10 +482,121 @@
     el.innerHTML = h;
   }
 
+  const mvCache = new Map();
+
+  async function loadMovement(m) {
+    if (mvCache.has(m.id)) return mvCache.get(m.id);
+    const u = "https://webapi.sporttery.cn/gateway/uniform/football/getFixedBonusV1.qry?clientCode=3001&matchId=" + m.id;
+    try {
+      const j = await fetchJSON(u, 15000);
+      const v = (j && j.value) || {};
+      const r = {
+        had: JC.poolMovement(v.hadList, ["h", "d", "a"]),
+        hhad: v.hhadList ? JC.poolMovement(v.hhadList, ["h", "d", "a"]) : null,
+      };
+      mvCache.set(m.id, r);
+      return r;
+    } catch (e) {
+      mvCache.set(m.id, null);
+      return null;
+    }
+  }
+
+  function movementHTML(r) {
+    if (!r || (!r.had && !r.hhad)) return '<div class="hint">官方暂无调赔记录或接口未响应（新开盘场次通常没有历史）。</div>';
+    let h = "";
+    const fmt = (mv, label) => {
+      if (!mv) return;
+      const arr = ["主胜", "平局", "客胜"];
+      const parts = [];
+      for (let i = 0; i < 3; i++) {
+        if (mv.first[i] != null && mv.last[i] != null) {
+          parts.push(arr[i] + " " + mv.first[i].toFixed(2) + "→" + mv.last[i].toFixed(2) +
+            (mv.delta[i] ? (mv.delta[i] > 0 ? "（+" : "（") + mv.delta[i].toFixed(2) + "）" : ""));
+        }
+      }
+      if (!parts.length) return;
+      let flow = "市场态度平稳";
+      if (mv.delta[0] != null && mv.delta[0] < -0.1) flow = "主胜赔率走低，资金偏主队";
+      else if (mv.delta[2] != null && mv.delta[2] < -0.1) flow = "客胜赔率走低，资金偏客队";
+      else if (mv.delta[0] != null && mv.delta[0] > 0.1) flow = "主胜赔率走高，资金偏客队";
+      else if (mv.delta[2] != null && mv.delta[2] > 0.1) flow = "客胜赔率走高，资金偏主队";
+      h += '<div class="pr-l" style="font-size:12px"><span>' + label + "（" + mv.n + " 次记录）</span></div>" +
+        '<div class="hint num" style="margin:2px 0 6px">' + esc(parts.join(" · ")) + "</div>" +
+        '<div class="hint">' + esc(flow) + (mv.lineChanged ? "；让球线发生过变化" : "") + "。调赔是庄家控风险的手段，不等于真实倾向。</div>";
+    };
+    fmt(r.had, "胜平负");
+    fmt(r.hhad, "让球胜平负");
+    return h || '<div class="hint">官方暂无调赔记录。</div>';
+  }
+
+  async function loadFund(m) {
+    try {
+      return await fetchJSON("/api/fund?date=" + encodeURIComponent(m.date) + "&num=" + encodeURIComponent(m.num), 25000);
+    } catch (e) {
+      return { found: false, error: e.message || String(e) };
+    }
+  }
+
+  function fundHTML(r) {
+    if (!r || r.found !== true) {
+      if (r && r.error) return '<div class="hint">基本面服务不可用：' + esc(r.error) + "。静态 Pages 模式无此功能，电脑服务模式（启动服务.bat）下可用。</div>";
+      return '<div class="hint">500 源暂未收录该场基本面（小联赛常见），本场以赔率口径为主。</div>';
+    }
+    const fh = JC.formSummary(r.home && r.home.matches);
+    const fa = JC.formSummary(r.away && r.away.matches);
+    let h = "";
+    if (r.league) h += '<div class="hint">' + esc(r.league) + (r.home && r.home.rank != null ? " · 主队联赛第 " + r.home.rank + " 位" : "") + (r.away && r.away.rank != null ? " · 客队第 " + r.away.rank + " 位" : "") + "</div>";
+    if (fh) h += '<div class="pr-l" style="font-size:12px"><span>主队近 ' + fh.n + " 场</span><b>" + fh.w + "胜" + fh.d + "平" + fh.l + "负 · 场均 " + fh.ppg + " 分</b></div>";
+    if (fa) h += '<div class="pr-l" style="font-size:12px"><span>客队近 ' + fa.n + " 场</span><b>" + fa.w + "胜" + fa.d + "平" + fa.l + "负 · 场均 " + fa.ppg + " 分</b></div>";
+    if (r.h2h && r.h2h.length) {
+      h += '<div class="hint" style="margin-top:6px">近期交锋：' + esc(r.h2h.slice(0, 2).map((x) => String(x.date).slice(5) + " " + x.home + " " + x.score + " " + x.away).join("；")) + "</div>";
+    }
+    if (fh && fa) {
+      const diff = fh.ppg - fa.ppg;
+      const s = diff >= 0.6 ? "基本面同向：主队近期状态明显更好" : diff <= -0.6 ? "基本面同向：客队近期状态明显更好" : "基本面分歧不大：两队近期状态接近";
+      h += '<div class="hint" style="margin-top:6px">' + esc(s) + "。战绩只作参考，不直接改变概率。</div>";
+    }
+    return h || '<div class="hint">暂无足够近期战绩。</div>';
+  }
+
+  function buildParlay() {
+    const rows = [];
+    for (const m of state.jc.list) {
+      const ana = JC.analyzeMatch(m.pools);
+      const st = JC.starsOf(ana);
+      if (!st || !ana.had) continue;
+      const o = ana.had.odds[st.dir];
+      if (o == null) continue;
+      const v = ana.value && ana.value[st.dir];
+      const edge = v && v.edge != null ? v.edge : 0;
+      rows.push({ m, name: st.name, p: st.pMax, o, stars: st.stars, score: st.pMax + Math.max(0, edge) * 0.5 });
+    }
+    rows.sort((a, b) => b.score - a.score);
+    const pick = rows.filter((r) => r.stars >= 3).slice(0, 2);
+    if (pick.length < 2) return null;
+    return { picks: pick, p: pick[0].p * pick[1].p, o: pick[0].o * pick[1].o };
+  }
+
+  function parlayHTML(pl) {
+    let h = '<div class="card"><div class="eyebrow">当日串关参考 · 按信心自动挑选</div>';
+    pl.picks.forEach((r, i) => {
+      h += '<div class="pr-l" style="font-size:13px"><span>' + (i + 1) + ". " + esc(r.m.num) + " " + esc(r.m.home) + " vs " + esc(r.m.away) + "</span><b class=\"num\">" + esc(r.name) + " @" + r.o.toFixed(2) + " · " + "★".repeat(r.stars) + "</b></div>";
+    });
+    h += '<div class="hint num" style="margin-top:6px">组合赔率 ' + pl.o.toFixed(2) + " · 两场全对概率约 " + (pl.p * 100).toFixed(1) + "%</div>" +
+      '<div class="hint" style="margin-top:4px">串关把方差放大，两场全对才有回报；仅供参考，请理性投注。</div></div>';
+    return h;
+  }
+
   function openSheet(m) {
     const ana = JC.analyzeMatch(m.pools);
+    const st8 = JC.starsOf(ana);
     let h = "<h3>" + esc(m.home) + " vs " + esc(m.away) + "</h3>" +
-      '<div class="sub-t">' + esc(m.league) + " · " + (wdLabel(m.date) ? wdLabel(m.date) + " " : "") + esc(m.date) + " " + esc(m.time) + " · 编号 " + esc(m.num) + "</div>";
+      '<div class="sub-t">' + esc(m.league) + " · " + (wdLabel(m.date) ? wdLabel(m.date) + " " : "") + esc(m.date) + " " + esc(m.time) + " · 编号 " + esc(m.num) + "</div>" +
+      (st8 ? '<div class="sub-t" style="color:var(--fg);font-size:13px">主方向 <strong>' + esc(st8.name) + "</strong> " +
+        "★".repeat(st8.stars) + "☆".repeat(5 - st8.stars) +
+        " · 市场倾向 " + esc(st8.name) + " " + pctf(st8.pMax, 0) +
+        (st8.div != null ? " · 口径分歧 " + st8.div.toFixed(3) + (st8.div < 0.04 ? "（低）" : st8.div < 0.08 ? "（中）" : "（高）") : "") + "</div>" : "");
     if (ana.had) {
       h += '<div class="card"><div class="eyebrow">胜平负 · 去水市场概率（返还率 ' + (ana.had.payout * 100).toFixed(1) + "%）</div>";
       ["胜", "平", "负"].forEach((lab, i) => {
@@ -479,8 +626,21 @@
       });
       h += '<div class="hint" style="margin-top:8px">EV = 一致概率 × 赔率 − 1，≥ +2% 视为有价值方向；Kelly 建议仓位 = max(0, EV ÷ (赔率−1))，建议再除以 4 并设单场上限。价值是长期统计优势，不代表单场结果。</div></div>';
     }
+    if (ana.hhadValue && ana.hhad) {
+      h += '<div class="card"><div class="eyebrow">让球(' + esc(ana.hhadValue.line) + ") · 模型 vs 市场</div>";
+      ["主胜", "平", "主负"].forEach((lab, i) => {
+        const p = ana.hhadValue.probs[i];
+        const o = ana.hhad.odds[i];
+        const v = ana.hhadValue.value[i];
+        const edge = v && v.edge != null ? v.edge : null;
+        const col = edge != null && edge >= 0.02 ? "var(--success)" : "var(--fg)";
+        h += '<div class="pr-row"><div class="pr-l"><span>' + lab + " @" + (o != null ? o.toFixed(2) : "—") + " · 模型 " + pctf(p) + "</span><b class=\"num\" style=\"color:" + col + "\">" + (edge == null ? "—" : (edge >= 0 ? "+" : "") + (edge * 100).toFixed(1) + "% EV") + "</b></div>" +
+          '<div class="bar"><i style="width:' + (p * 100).toFixed(1) + '%"></i></div></div>';
+      });
+      h += '<div class="hint" style="margin-top:6px">模型概率由比分矩阵按让球线平移得到；EV ≥ +2% 才值得关注。</div></div>';
+    }
     if (ana.pm) {
-      h += '<div class="card"><div class="eyebrow">泊松比分分布（λ总≈' + (ana.pm.lambdaTotal != null ? ana.pm.lambdaTotal.toFixed(2) : "—") + "）</div>";
+      h += '<div class="card"><div class="eyebrow">比分分布（泊松 + Dixon-Coles 修正 ρ=' + (ana.pm.rho != null ? ana.pm.rho.toFixed(2) : "-0.05") + " · λ总≈" + (ana.pm.lambdaTotal != null ? ana.pm.lambdaTotal.toFixed(2) : "—") + "）</div>";
       for (const s of ana.pm.top.slice(0, 6)) {
         h += '<div class="pr-row"><div class="pr-l"><span class="num">' + s.h + ":" + s.a + '</span><b class="num">' + (s.p * 100).toFixed(1) + "%</b></div>" +
           '<div class="bar"><i style="width:' + (s.p * 100).toFixed(1) + '%"></i></div></div>';
@@ -490,11 +650,21 @@
     } else if (ana.ttg && ana.ttg.lambda != null) {
       h += '<div class="card"><div class="eyebrow">总进球</div><div class="hint">市场隐含平均总进球 ≈ ' + ana.ttg.lambda.toFixed(2) + "（本场缺比分玩法数据，无法重建泊松矩阵）</div></div>";
     }
-    h += '<div class="hint" style="margin:6px 2px 0">所有口径均来自官方赔率的换算，属于概率估计而非预测。理性投注，量力而行。</div>';
+    h += '<div class="card"><div class="eyebrow">赔率变动（开盘 → 当前）</div><div id="mv-body"><div class="hint">加载中…</div></div></div>';
+    h += '<div class="card"><div class="eyebrow">基本面 · 排名 / 近况 / 交锋（500 源）</div><div id="fund-body"><div class="hint">加载中…</div></div></div>';
+    h += '<div class="hint" style="margin:6px 2px 0">所有口径均来自官方赔率与公开数据的换算，属于概率估计而非预测。理性投注，量力而行。</div>';
     $("#sheet-body").innerHTML = h;
     $("#overlay").classList.add("on");
     $("#sheet").classList.add("open");
     $("#sheet").scrollTop = 0;
+    loadMovement(m).then((r) => {
+      const el = $("#mv-body");
+      if (el) el.innerHTML = movementHTML(r);
+    });
+    loadFund(m).then((r) => {
+      const el = $("#fund-body");
+      if (el) el.innerHTML = fundHTML(r);
+    });
   }
 
   function closeSheet() {
