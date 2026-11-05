@@ -307,8 +307,8 @@
       '<div class="meta">' + esc(String(last.date).slice(0, 10)) + " 开奖</div></div>" +
       freshHTML(g) + "</div>" +
       '<div class="balls" style="margin-top:12px">' + gameBalls(g, last.nums) + "</div></div>";
-    h += '<div class="card"><div class="eyebrow">12 步概率模型 · 投票合成</div>' +
-      '<div class="hint">与桌面版「双彩智投」同构：超几何 / 贝叶斯 / 卡方 / 马尔科夫 / 蒙特卡洛 / 凯利 / 大数定律；只用最近 100 期窗口，随机序列一致、结果同构。</div>' +
+    h += '<div class="card"><div class="eyebrow">16 模型 · 回测加权投票</div>' +
+      '<div class="hint">原 12 步模型 + 衰减热度 / 形态匹配 / 共现聚类 / 模拟退火；近 30 期逐期回测自动分配权重；只用最近 100 期窗口。</div>' +
       '<div class="btn-row"><button class="btn ghost" data-act="refresh">更新数据</button>' +
       '<button class="btn primary" data-act="go" id="' + g + '-go">' + (st.result ? "重新分析" : "开始分析") + "</button></div>" +
       '<div class="hint" id="' + g + '-prog" style="margin-top:8px;min-height:16px">' + (st.running ? "16 个模型 + 近 30 期回测计算中（约数秒）…" : "") + "</div></div>";
