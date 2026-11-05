@@ -46,21 +46,57 @@ def write(name, obj):
     print("已写入 data/%s %d bytes" % (name, os.path.getsize(p)))
 
 
+def load_existing(name):
+    try:
+        with open(os.path.join(ROOT, "data", name), "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d.get("list") or []
+    except Exception:
+        return []
+
+
+def merge(old_list, new_list):
+    """按期号合并新旧数据，保留最新 1000 期。"""
+    by = {}
+    for d in old_list or []:
+        by[str(d["issue"])] = d
+    for d in new_list or []:
+        by[str(d["issue"])] = d
+    out = sorted(by.values(), key=lambda d: str(d["issue"]))
+    return out[-1000:]
+
+
 def main():
     now = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    ssq = fetch_ssq(1000)
-    print("双色球 %d 期（最新 %s）" % (len(ssq), ssq[-1]["issue"] if ssq else "-"))
-    dlt = fetch_dlt(1000)
-    print("大乐透 %d 期（最新 %s）" % (len(dlt), dlt[-1]["issue"] if dlt else "-"))
-    write("ssq.json", {"t": now, "list": ssq})
-    write("dlt.json", {"t": now, "list": dlt})
-    build_snapshot(ssq, dlt)  # 同一份的数据刷进离线快照
+    ssq = []
+    dlt = []
+    try:
+        ssq = fetch_ssq(1000)
+        print("双色球抓取 %d 期（最新 %s）" % (len(ssq), ssq[-1]["issue"] if ssq else "-"))
+    except Exception as e:
+        print("双色球抓取失败:", str(e)[:150])
+    try:
+        dlt = fetch_dlt(1000)
+        print("大乐透抓取 %d 期（最新 %s）" % (len(dlt), dlt[-1]["issue"] if dlt else "-"))
+    except Exception as e:
+        print("大乐透抓取失败:", str(e)[:150])
+    ssq_m = merge(load_existing("ssq.json"), ssq)
+    dlt_m = merge(load_existing("dlt.json"), dlt)
+    if not ssq_m and not dlt_m:
+        print("所有数据源均不可用且无存量数据")
+        sys.exit(1)
+    if ssq_m:
+        write("ssq.json", {"t": now, "list": ssq_m})
+    if dlt_m:
+        write("dlt.json", {"t": now, "list": dlt_m})
+    if ssq_m and dlt_m:
+        build_snapshot(ssq_m, dlt_m)  # 同一份的数据刷进离线快照
     try:
         jc = fetch_jc()
         print("竞彩赛程 %d 场" % len(jc))
         write("jc.json", {"t": now, "list": jc})
     except Exception as e:
-        print("竞彩赛程抓取失败（不影响开奖数据）:", e)
+        print("竞彩赛程抓取失败（不影响开奖数据）:", str(e)[:150])
 
 
 if __name__ == "__main__":

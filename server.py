@@ -68,8 +68,76 @@ def _normalize_ssq(items):
     return out
 
 
+def _http_text_page(url, timeout=20):
+    """拉取 HTML 页面（备用源 500 彩票网，GBK 编码）。"""
+    h = dict(UA)
+    h["Referer"] = "https://datachart.500.com/"
+    req = urllib.request.Request(url, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
+            raw = r.read()
+    except Exception:
+        ctx2 = ssl._create_unverified_context()
+        req2 = urllib.request.Request(url, headers=h)
+        with urllib.request.urlopen(req2, timeout=timeout, context=ctx2) as r:
+            raw = r.read()
+    for enc in ("gb18030", "utf-8"):
+        try:
+            return raw.decode(enc)
+        except Exception:
+            pass
+    return raw.decode("utf-8", "ignore")
+
+
+def _normalize_500_rows(html, front_n, back_n, ssq_full_issue=False):
+    """解析 500 彩票网 history 页表格行；自动剔除 HTML 注释，5 位双色球期号补全为 7 位。"""
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    rows = re.findall(r'<tr[^>]*class="t_tr1"[^>]*>(.*?)</tr>', html, re.S)
+    out = []
+    for row in rows:
+        tds = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+        tds = [re.sub(r"<[^>]+>", "", t).strip() for t in tds]
+        if not tds:
+            continue
+        code = tds[0]
+        if not re.fullmatch(r"\d{5,7}", code):
+            continue
+        date = ""
+        nums = []
+        for t in tds[1:]:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", t):
+                date = t
+                continue
+            if re.fullmatch(r"\d{1,2}", t):
+                nums.append(int(t))
+        if len(nums) < front_n + back_n:
+            continue
+        if ssq_full_issue and len(code) == 5:
+            code = "20" + code
+        out.append({"issue": code, "date": date[:10],
+                    "nums": sorted(nums[:front_n]) + sorted(nums[front_n:front_n + back_n])})
+    out.sort(key=lambda d: d["issue"])
+    return out
+
+
+def fetch_ssq_500(n=1000):
+    html = _http_text_page("https://datachart.500.com/ssq/history/newinc/history.php?limit=%d" % min(n, 5000))
+    return _normalize_500_rows(html, 6, 1, ssq_full_issue=True)[-n:]
+
+
 def fetch_ssq(n=1000):
-    """双色球：福彩官网接口，每页 100 期。"""
+    """双色球：福彩官方优先（国内 IP），不可达时自动改用 500 备用源。"""
+    try:
+        lst = fetch_ssq_cwl(n)
+        if lst:
+            return lst
+    except Exception as e:
+        print("[ssq] 福彩官方接口失败，改用备用源：%s" % str(e)[:120], file=sys.stderr)
+    return fetch_ssq_500(n)
+
+
+def fetch_ssq_cwl(n=1000):
+    """双色球：福彩官网接口，每页 100 期（境外机房 IP 会被 403）。"""
     all_items = []
     page = 1
     while len(all_items) < n + 50 and page <= 15:
@@ -105,7 +173,23 @@ def _normalize_dlt(items):
     return out
 
 
+def fetch_dlt_500(n=1000):
+    html = _http_text_page("https://datachart.500.com/dlt/history/newinc/history.php?limit=%d" % min(n, 5000))
+    return _normalize_500_rows(html, 5, 2)[-n:]
+
+
 def fetch_dlt(n=1000):
+    """大乐透：体彩官方优先，不可达时自动改用 500 备用源。"""
+    try:
+        lst = fetch_dlt_official(n)
+        if lst:
+            return lst
+    except Exception as e:
+        print("[dlt] 体彩官方接口失败，改用备用源：%s" % str(e)[:120], file=sys.stderr)
+    return fetch_dlt_500(n)
+
+
+def fetch_dlt_official(n=1000):
     """大乐透：体彩官网接口 gameNo=85，每页 100 期。"""
     all_items = []
     page = 1
