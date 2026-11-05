@@ -1,17 +1,17 @@
 /* sw.js — v4：HTML/脚本/样式「在线优先、离线回退缓存」（更新即时生效）；
    图标/清单缓存优先；接口网络优先 + 运行时缓存兜底。
    注意：Service Worker 仅在 https 或 localhost 下注册。 */
-const VER = "lph-v4-20261105";
+const VER = "lph-v4b-20261105";
 const SHELL_CACHE = "lph-shell-" + VER;
 const API_CACHE = "lph-api-" + VER;
 const SHELL = [
   "./",
   "./index.html",
-  "./css/style.css?v=4",
-  "./js/engine.js?v=4",
-  "./js/jc-core.js?v=4",
-  "./js/app.js?v=4",
-  "./data/snapshot.js?v=4",
+  "./css/style.v4.css",
+  "./js/engine.v4.js",
+  "./js/jc-core.v4.js",
+  "./js/app.v4.js",
+  "./data/snapshot.v4.js",
   "./data/ssq.json",
   "./data/dlt.json",
   "./data/jc.json",
@@ -67,9 +67,9 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // HTML / 脚本 / 样式：在线优先，离线才回退缓存 —— 保证线上更新即时到达
+  // HTML / 脚本 / 样式 / 数据：在线优先，离线才回退缓存 —— 保证线上更新即时到达
   const isDoc = req.mode === "navigate" || url.pathname.endsWith(".html") || url.pathname === "/";
-  const isCode = url.pathname.startsWith("/js/") || url.pathname.startsWith("/css/") || /[?&]v=/.test(url.search);
+  const isCode = url.pathname.startsWith("/js/") || url.pathname.startsWith("/css/") || url.pathname.startsWith("/data/");
   if (isDoc || isCode) {
     e.respondWith(
       fetch(req)
