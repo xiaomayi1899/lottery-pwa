@@ -1,6 +1,7 @@
-/* app.js — 彩票预测助手 页面逻辑
-   数据层：官方接口（本机服务代理）→ localStorage 缓存 → 内置快照兜底
-   页面：双色球 / 大乐透（12 步模型） + 竞彩足球（赔率互证） + 说明 */
+/* app.v5.js — 彩票预测助手 页面逻辑
+   数字彩：近 50 期走势形态系统（和值/奇偶/质合/大小/区间/走势模式/冷热遗漏）
+   竞彩：三指标综合（去水 / 热度(投注率代理) / 实力）+ 大热必死 + 跨玩法异常检测
+   数据层：官方接口（本机服务或 GitHub Pages 静态数据自动降级）→ localStorage → 内置快照 */
 (() => {
   "use strict";
 
@@ -12,11 +13,12 @@
   const GAMES = { ssq: "双色球", dlt: "大乐透" };
   const WD = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
   const pctf = (x, d) => (x == null || !isFinite(x) ? "—" : (x * 100).toFixed(d == null ? 1 : d) + "%");
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
 
   /* ============ 数据层 ============ */
   const LS_KEY = "lph_data_v1";
   const SNAP = window.__SNAPSHOT__ || { builtAt: "", ssq: [], dlt: [] };
-  window.DATA = { ssq: [], dlt: [] }; // 12 步引擎读取的全局数据
+  window.DATA = { ssq: [], dlt: [] };
 
   const store = {
     ssq: { list: [], ts: 0, src: "" },
@@ -25,7 +27,7 @@
   const state = {
     ssq: { result: null, running: false, metric: "freq", open: new Set(), rendered: false },
     dlt: { result: null, running: false, metric: "freq", open: new Set(), rendered: false },
-    jc: { list: [], ts: 0, loading: false, loaded: false, error: "" },
+    jc: { list: [], ts: 0, loading: false, loaded: false, error: "", pop: null },
   };
 
   function loadLocal() {
@@ -84,7 +86,6 @@
     throw new Error((j && j.error) || "数据格式异常");
   }
 
-  /* 大乐透：体彩官方接口开放跨域，手机可浏览器直连（10 页×100 期） */
   async function fetchDltLive() {
     const out = [], seen = new Set();
     for (let page = 1; page <= 10; page++) {
@@ -105,7 +106,6 @@
     return out.slice(-1000);
   }
 
-  /* 数据来源链：本机服务 → GitHub Pages 静态数据；大乐透优先浏览器直连官方 */
   const SOURCES = {
     ssq: [() => fetchNorm("/api/ssq?n=1000"), () => fetchNorm("./data/ssq.json")],
     dlt: [fetchDltLive, () => fetchNorm("/api/dlt?n=1000"), () => fetchNorm("./data/dlt.json")],
@@ -138,7 +138,7 @@
     return true;
   }
 
-  /* ============ 号码彩 UI ============ */
+  /* ============ 号码彩 UI（近 50 期走势形态） ============ */
   function gameBalls(g, nums, size) {
     const cfg = Engine.GAMES[g];
     const fk = cfg.fk;
@@ -173,7 +173,7 @@
 
   function statsFor(g) {
     const cfg = Engine.GAMES[g];
-    const draws = store[g].list.slice(-100);
+    const draws = store[g].list.slice(-50);
     const D = draws.length;
     const fc = new Array(cfg.fn + 1).fill(0), bc = new Array(cfg.bn + 1).fill(0);
     const fom = new Array(cfg.fn + 1).fill(D), bom = new Array(cfg.bn + 1).fill(D);
@@ -205,39 +205,11 @@
     return h + "</div>";
   }
 
-  function setsCardHTML(g) {
-    const st = state[g];
-    if (!st.result || !st.result.sets) return "";
-    let h = '<div class="card"><div class="eyebrow">策略五注 · 同一批模型的不同合成视角</div>';
-    st.result.sets.forEach((s, i) => {
-      h += '<div class="pr-row"><div class="pr-l"><span>' + (i + 1) + ". " + esc(s.tag) + "</span></div>" +
-        '<div class="balls" style="margin:4px 0 2px">' + gameBalls(g, s.f.concat(s.b), "xs") + "</div></div>";
-    });
-    h += '<div class="hint" style="margin-top:8px">五注只是同一信息的不同组合方式，不改变中奖概率；随机对照那注与其他四注的期望完全相同。</div></div>';
-    return h;
-  }
-
-  function weightsCardHTML(g) {
-    const st = state[g];
-    const w = st.result && st.result.weights;
-    if (!w || !w.rows) return "";
-    const maxW = Math.max.apply(null, w.rows.map((r) => r.w));
-    let h = '<div class="card"><div class="eyebrow">回测加权 · 近 ' + w.n + ' 期逐期走前回测</div>';
-    h += '<div class="hint" style="margin-bottom:8px">基准 = 随机期望（前 ' + w.baseF.toFixed(2) + " 个 / 后 " + w.baseB.toFixed(2) + " 个）；命中高于基准的模型话语权更大。</div>";
-    for (const r of w.rows) {
-      const tag = r.avgF != null ? ' <span class="src-tag">均命中 ' + r.avgF.toFixed(2) + "</span>" : ' <span class="src-tag">中性权重</span>';
-      h += '<div class="pr-row"><div class="pr-l"><span>' + esc(r.name) + tag + '</span><b class="num">' + (r.w * 100).toFixed(1) + "%</b></div>" +
-        '<div class="bar"><i style="width:' + (r.w / maxW * 100).toFixed(0) + '%"></i></div></div>';
-    }
-    h += '<div class="hint" style="margin-top:8px">' + esc(w.note) + "。回测加权只是历史统计，不改变每期开奖的随机性。</div></div>";
-    return h;
-  }
-
   function statsCardHTML(g) {
     const cfg = Engine.GAMES[g];
     const m = state[g].metric;
     return '<div class="card">' +
-      '<div class="eyebrow">近 100 期统计 · ' + (m === "freq" ? "按出现次数着色" : "按当前遗漏着色") + "</div>" +
+      '<div class="eyebrow">近 50 期统计 · ' + (m === "freq" ? "按出现次数着色" : "按当前遗漏着色") + "</div>" +
       '<div class="seg"><button class="' + (m === "freq" ? "on" : "") + '" data-act="metric" data-m="freq">出现次数</button>' +
       '<button class="' + (m === "miss" ? "on" : "") + '" data-act="metric" data-m="miss">遗漏期数</button></div>' +
       '<div class="hint" style="margin-bottom:8px">前区（1–' + cfg.fn + "）</div>" + numgridHTML(g, "f") +
@@ -248,28 +220,43 @@
 
   function bannerHTML(g) {
     const r = state[g].result;
+    const f = r.form;
     return '<div class="banner">' +
-      '<div class="tag">模型合成推荐 · ' + esc(r.name) + "</div>" +
+      '<div class="tag">形态合成推荐 · ' + esc(r.name) + "</div>" +
       '<div class="pick">' + gameBalls(g, r.final.f.concat(r.final.b)) + "</div>" +
-      '<div class="votes num">前区加权得票(×100) ' + esc(r.votes.f) + "<br>后区加权得票(×100) " + esc(r.votes.b) + "</div>" +
+      '<div class="votes num">预测形态：奇偶 ' + esc(f.odd) + " · 质合 " + esc(f.prime) + " · 大小 " + esc(f.low) +
+      " · 区间 " + esc(f.zone) + " · 和值 " + f.sum[0] + "–" + f.sum[1] +
+      " · 含重号 " + f.repeat + " / 邻号 " + f.neighbor + "</div>" +
       (r.consensus ? '<div class="consensus">' + esc(r.consensus) + "</div>" : "") +
       '<div class="upto">截至第 ' + esc(r.upto.issue) + " 期（" + esc(r.upto.date) + " 开奖）· 分析最近 " + r.upto.count +
-      " 期 · 库存 " + r.upto.stock.toLocaleString("en-US") + " 期 · 计算 " + r.ms + "ms<br>" +
-      "再次强调：推荐是统计输出的练习结果，不能提高中奖概率。</div></div>";
+      " 期走势 · 计算 " + r.ms + "ms<br>" +
+      "再次强调：推荐是统计整理输出，与随机对照的中奖概率完全相同。</div></div>";
+  }
+
+  function setsCardHTML(g) {
+    const st = state[g];
+    if (!st.result || !st.result.sets) return "";
+    let h = '<div class="card"><div class="eyebrow">策略五注 · 同一预测形态的不同评分视角</div>';
+    st.result.sets.forEach((s, i) => {
+      h += '<div class="pr-row"><div class="pr-l"><span>' + (i + 1) + ". " + esc(s.tag) + "</span></div>" +
+        '<div class="balls" style="margin:4px 0 2px">' + gameBalls(g, s.f.concat(s.b), "xs") + "</div></div>";
+    });
+    h += '<div class="hint" style="margin-top:8px">五注都满足同一预测形态，只是选号评分视角不同；随机对照与其他四注的中奖概率完全相同。</div></div>';
+    return h;
   }
 
   function stepsHTML(g) {
     const r = state[g].result;
-    let h = '<div style="margin-top:14px"><div class="eyebrow">12 步明细（点开查看）</div></div>';
+    let h = '<div style="margin-top:14px"><div class="eyebrow">走势明细（点开查看）</div></div>';
     r.sections.forEach((sec, i) => {
       const open = state[g].open.has(i) ? " open" : "";
       let body = "";
       for (const l of sec.lines) {
         const e2 = esc(l);
-        if (/^(奖级|前区|后区|一等奖|二等奖|三等奖|四等奖|五等奖|六等奖|七等奖|八等奖|九等奖|不中奖|n=|模型|数据:)/.test(l)) body += '<div class="mono">' + e2 + "</div>";
+        if (/^(近 |预测|质数口径|三区|热号|冷号|超期|上期开|重号|邻号|⚠|合成方法|走势结构|所有推荐|均价)/.test(l)) body += '<div class="mono">' + e2 + "</div>";
         else body += "<div>" + e2 + "</div>";
       }
-      body += '<div class="cand">[该模型推荐组] ' + esc(Engine.fmtS(sec.cand.f)) + " + " + esc(Engine.fmtS(sec.cand.b)) + "</div>";
+      body += sec.cand ? ('<div class="cand">[形态合成推荐] ' + esc(Engine.fmtS(sec.cand.f)) + " + " + esc(Engine.fmtS(sec.cand.b)) + "</div>") : "";
       body += '<div class="why">(' + esc(sec.why) + ")</div>";
       h += '<details class="step"' + open + '><summary>' + esc(sec.title) + '<span class="arrow">›</span></summary><div class="body">' + body + "</div></details>";
     });
@@ -307,15 +294,14 @@
       '<div class="meta">' + esc(String(last.date).slice(0, 10)) + " 开奖</div></div>" +
       freshHTML(g) + "</div>" +
       '<div class="balls" style="margin-top:12px">' + gameBalls(g, last.nums) + "</div></div>";
-    h += '<div class="card"><div class="eyebrow">16 模型 · 回测加权投票</div>' +
-      '<div class="hint">原 12 步模型 + 衰减热度 / 形态匹配 / 共现聚类 / 模拟退火；近 30 期逐期回测自动分配权重；只用最近 100 期窗口。</div>' +
+    h += '<div class="card"><div class="eyebrow">近 50 期走势形态 · 推荐合成</div>' +
+      '<div class="hint">只用最近 50 期：和值 / 奇偶 / 质合 / 大小 / 区间 / 走势图模式（重号·邻号·斜跳）/ 冷热遗漏 → 预测下期形态 → 形态约束下按四种评分视角合成，另附纯随机对照。</div>' +
       '<div class="btn-row"><button class="btn ghost" data-act="refresh">更新数据</button>' +
       '<button class="btn primary" data-act="go" id="' + g + '-go">' + (st.result ? "重新分析" : "开始分析") + "</button></div>" +
-      '<div class="hint" id="' + g + '-prog" style="margin-top:8px;min-height:16px">' + (st.running ? "16 个模型 + 近 30 期回测计算中（约数秒）…" : "") + "</div></div>";
+      '<div class="hint" id="' + g + '-prog" style="margin-top:8px;min-height:16px">' + (st.running ? "近 50 期走势形态分析中…" : "") + "</div></div>";
     if (st.result) {
       h += bannerHTML(g);
       h += setsCardHTML(g);
-      h += weightsCardHTML(g);
     }
     h += statsCardHTML(g);
     if (st.result) h += stepsHTML(g);
@@ -327,11 +313,11 @@
   async function runAnalysis(g) {
     const st = state[g];
     if (st.running) return;
-    if (store[g].list.length < 100) { toast("历史数据不足 100 期，请先更新数据"); return; }
+    if (store[g].list.length < 50) { toast("历史数据不足 50 期，请先更新数据"); return; }
     st.running = true;
     const btn = $("#" + g + "-go"), prog = $("#" + g + "-prog");
     if (btn) btn.disabled = true;
-    if (prog) prog.textContent = "16 个模型 + 近 30 期逐期回测计算中（约数秒），请稍候…";
+    if (prog) prog.textContent = "近 50 期走势形态分析中，请稍候…";
     await new Promise((r) => setTimeout(r, 50));
     try {
       const t0 = performance.now();
@@ -340,7 +326,7 @@
       st.result = res;
       st.running = false;
       renderGame(g);
-      toast(GAMES[g] + "分析完成，用时 " + res.ms + "ms");
+      toast(GAMES[g] + "走势分析完成，用时 " + res.ms + "ms");
     } catch (e) {
       toast("分析出错：" + e.message);
       if (prog) prog.textContent = "";
@@ -395,13 +381,6 @@
     };
   }
 
-  function parseRawJC(j) {
-    const mil = (j.value && j.value.matchInfoList) || [];
-    const arr = [];
-    for (const lg of mil) for (const s of lg.subMatchList || []) arr.push(matchFromRaw(s));
-    return arr;
-  }
-
   async function loadJC(manual) {
     if (state.jc.loading) return;
     state.jc.loading = true;
@@ -410,24 +389,25 @@
     try {
       let arr = [];
       const chain = [
-      () => fetchJSON(JC_API, 20000).then(parseRawJC),
-      () => fetchJSON("/api/jc", 20000).then(parseRawJC),
-      () => fetchJSON("./data/jc.json", 20000).then((j) => {
-        if (j && Array.isArray(j.list) && j.list.length) return j.list;
-        throw new Error("静态赛程不可用");
-      }),
-    ];
-    for (const src of chain) {
-      try { const got = await src(); if (got && got.length) { arr = got; break; } }
-      catch (e) { /* 试下一个来源 */ }
-    }
-    if (!arr.length) throw new Error("所有赛程来源均不可达（可能处于销售切换时段）");
-    arr.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-    state.jc.list = arr;
-    state.jc.ts = Date.now();
-    state.jc.loaded = true;
-    setNet("ok", "官方数据已连接");
-    persist();
+        () => fetchJSON(JC_API, 20000).then(parseRawJC),
+        () => fetchJSON("/api/jc", 20000).then(parseRawJC),
+        () => fetchJSON("./data/jc.json", 20000).then((j) => {
+          if (j && Array.isArray(j.list) && j.list.length) return j.list;
+          throw new Error("静态赛程不可用");
+        }),
+      ];
+      for (const src of chain) {
+        try { const got = await src(); if (got && got.length) { arr = got; break; } }
+        catch (e) { /* 试下一个来源 */ }
+      }
+      if (!arr.length) throw new Error("所有赛程来源均不可达（可能处于销售切换时段）");
+      arr.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+      state.jc.list = arr;
+      state.jc.ts = Date.now();
+      state.jc.loaded = true;
+      state.jc.pop = JC.populationStats(arr);
+      setNet("ok", "官方数据已连接");
+      persist();
     } catch (e) {
       state.jc.error = e.message || String(e);
       if (!state.jc.list.length) setNet("err", "竞彩接口不可用");
@@ -435,6 +415,13 @@
     }
     state.jc.loading = false;
     renderJC();
+  }
+
+  function parseRawJC(j) {
+    const mil = (j.value && j.value.matchInfoList) || [];
+    const arr = [];
+    for (const lg of mil) for (const s of lg.subMatchList || []) arr.push(matchFromRaw(s));
+    return arr;
   }
 
   function matchCardHTML(m) {
@@ -455,23 +442,50 @@
       "</div></div>";
   }
 
+  function buildParlay() {
+    const rows = [];
+    for (const m of state.jc.list) {
+      const ana = JC.analyzeMatch(m.pools);
+      const ctx = { heat: JC.heatFromOdds(ana, null), strength: null, anomaly: JC.anomalyScan(ana, state.jc.pop) };
+      const comp = JC.composite(ana, ctx);
+      if (!comp) continue;
+      const o = comp.top.o;
+      if (o == null) continue;
+      rows.push({ m, name: comp.top.name, p: comp.top.p, o, stars: comp.stars, score: comp.top.total });
+    }
+    rows.sort((a, b) => b.score - a.score);
+    const pick = rows.filter((r) => r.stars >= 3).slice(0, 2);
+    if (pick.length < 2) return null;
+    return { picks: pick, p: pick[0].p * pick[1].p, o: pick[0].o * pick[1].o };
+  }
+
+  function parlayHTML(pl) {
+    let h = '<div class="card"><div class="eyebrow">当日串关参考 · 三指标综合挑选</div>';
+    pl.picks.forEach((r, i) => {
+      h += '<div class="pr-l" style="font-size:13px"><span>' + (i + 1) + ". " + esc(r.m.num) + " " + esc(r.m.home) + " vs " + esc(r.m.away) + "</span><b class=\"num\">" + esc(r.name) + " @" + r.o.toFixed(2) + " · " + "★".repeat(r.stars) + "</b></div>";
+    });
+    h += '<div class="hint num" style="margin-top:6px">组合赔率 ' + pl.o.toFixed(2) + " · 两场全对概率约 " + (pl.p * 100).toFixed(1) + "%</div>" +
+      '<div class="hint" style="margin-top:4px">串关把方差放大，两场全对才有回报；仅供参考，请理性投注。</div></div>';
+    return h;
+  }
+
   function renderJC() {
     const el = $("#page-jc");
     const jst = state.jc;
     let h = '<div class="card"><div class="eyebrow">竞彩足球 · 官方在售场次</div>' +
-      '<div class="hint">点任意场次查看：去水概率、跨玩法互证、Dixon-Coles 比分分布、赔率变动、基本面、价值与 Kelly。' +
+      '<div class="hint">推荐 = ① 真实去水赔率 ② 市场热度（官方未公开投注率，用赔率水平+变化方向代理）③ 实力（排名/近况/交锋），叠加「大热必死」与跨玩法异常检测。' +
       (jst.ts ? "赔率更新于 " + fmtTime(jst.ts) + "。" : "") + "</div>" +
       '<div class="btn-row"><button class="btn ghost" data-act="refresh">刷新赛程</button></div></div>';
-    if (jst.list.length) {
-      const pl = buildParlay();
-      if (pl) h += parlayHTML(pl);
-    }
     if (jst.loading && !jst.list.length) {
       h += '<div class="skel tall"></div><div class="skel tall"></div><div class="skel tall"></div>';
     } else if (!jst.list.length) {
       h += '<div class="state-box"><strong>暂时拿不到赛程</strong>' + esc(jst.error || "网络不可用或官方接口维护中，稍后重试") +
         '<div><button class="btn primary" data-act="refresh">重试</button></div></div>';
     } else {
+      if (jst.pop) {
+        const pl = buildParlay();
+        if (pl) h += parlayHTML(pl);
+      }
       let day = "";
       for (const m of jst.list) {
         if (m.date !== day) { day = m.date; h += '<div class="day-h num">' + (wdLabel(m.date) ? wdLabel(m.date) + " " : "") + esc(day) + "</div>"; }
@@ -489,7 +503,7 @@
     const u = "https://webapi.sporttery.cn/gateway/uniform/football/getFixedBonusV1.qry?clientCode=3001&matchId=" + m.id;
     try {
       const j = await fetchJSON(u, 15000);
-      const v = (j && j.value) || {};
+      const v = (j && j.value && j.value.oddsHistory) || {};
       const r = {
         had: JC.poolMovement(v.hadList, ["h", "d", "a"]),
         hhad: v.hhadList ? JC.poolMovement(v.hhadList, ["h", "d", "a"]) : null,
@@ -552,53 +566,62 @@
     if (r.h2h && r.h2h.length) {
       h += '<div class="hint" style="margin-top:6px">近期交锋：' + esc(r.h2h.slice(0, 2).map((x) => String(x.date).slice(5) + " " + x.home + " " + x.score + " " + x.away).join("；")) + "</div>";
     }
-    if (fh && fa) {
-      const diff = fh.ppg - fa.ppg;
-      const s = diff >= 0.6 ? "基本面同向：主队近期状态明显更好" : diff <= -0.6 ? "基本面同向：客队近期状态明显更好" : "基本面分歧不大：两队近期状态接近";
-      h += '<div class="hint" style="margin-top:6px">' + esc(s) + "。战绩只作参考，不直接改变概率。</div>";
-    }
     return h || '<div class="hint">暂无足够近期战绩。</div>';
   }
 
-  function buildParlay() {
-    const rows = [];
-    for (const m of state.jc.list) {
-      const ana = JC.analyzeMatch(m.pools);
-      const st = JC.starsOf(ana);
-      if (!st || !ana.had) continue;
-      const o = ana.had.odds[st.dir];
-      if (o == null) continue;
-      const v = ana.value && ana.value[st.dir];
-      const edge = v && v.edge != null ? v.edge : 0;
-      rows.push({ m, name: st.name, p: st.pMax, o, stars: st.stars, score: st.pMax + Math.max(0, edge) * 0.5 });
+  function compositeHTML(comp, ana) {
+    if (!comp) return '<div class="hint">暂无可用数据。</div>';
+    let h = "";
+    const anomaly = ana && ana._anomaly && ana._anomaly.bonus ? ana._anomaly.bonus : null;
+    let anomDir = null;
+    if (anomaly) {
+      let bi = 0;
+      for (let i = 1; i < 3; i++) if (anomaly[i] > anomaly[bi]) bi = i;
+      if (anomaly[bi] >= 0.62) anomDir = ["胜", "平", "负"][bi];
     }
-    rows.sort((a, b) => b.score - a.score);
-    const pick = rows.filter((r) => r.stars >= 3).slice(0, 2);
-    if (pick.length < 2) return null;
-    return { picks: pick, p: pick[0].p * pick[1].p, o: pick[0].o * pick[1].o };
-  }
-
-  function parlayHTML(pl) {
-    let h = '<div class="card"><div class="eyebrow">当日串关参考 · 按信心自动挑选</div>';
-    pl.picks.forEach((r, i) => {
-      h += '<div class="pr-l" style="font-size:13px"><span>' + (i + 1) + ". " + esc(r.m.num) + " " + esc(r.m.home) + " vs " + esc(r.m.away) + "</span><b class=\"num\">" + esc(r.name) + " @" + r.o.toFixed(2) + " · " + "★".repeat(r.stars) + "</b></div>";
-    });
-    h += '<div class="hint num" style="margin-top:6px">组合赔率 ' + pl.o.toFixed(2) + " · 两场全对概率约 " + (pl.p * 100).toFixed(1) + "%</div>" +
-      '<div class="hint" style="margin-top:4px">串关把方差放大，两场全对才有回报；仅供参考，请理性投注。</div></div>';
+    let conclusion;
+    if (comp.trap && comp.hot) {
+      conclusion = "结论：大热必死——回避 " + esc(comp.hot.name) + "（热度 " + (comp.hot.heat * 100).toFixed(0) + "%、EV " +
+        (comp.hot.edge == null ? "—" : (comp.hot.edge * 100).toFixed(1) + "%") + "）" +
+        (anomDir && anomDir !== comp.hot.name ? "；异常指向 " + esc(anomDir) + "，可小注防冷" : "；建议观望或防冷");
+    } else if (comp.top.total >= 0.55) {
+      conclusion = "结论：支持 " + esc(comp.top.name) + " @" + (comp.top.o != null ? comp.top.o.toFixed(2) : "—") +
+        "（信心 " + "★".repeat(comp.stars) + "，综合 " + (comp.top.total * 100).toFixed(0) + "%）";
+    } else if (comp.top.total >= 0.48) {
+      conclusion = "结论：倾向 " + esc(comp.top.name) + " @" + (comp.top.o != null ? comp.top.o.toFixed(2) : "—") +
+        "（信心 " + "★".repeat(comp.stars) + "★仅参考）";
+    } else {
+      conclusion = "结论：本场方向不明，建议观望" + (anomDir ? "（异常略指向 " + esc(anomDir) + "）" : "");
+    }
+    h += '<div class="consensus" style="font-size:14px">' + conclusion + "</div>";
+    for (const r of comp.rows) {
+      const col = r.total >= 0.62 ? "var(--success)" : r.total <= 0.42 ? "var(--danger)" : "var(--fg)";
+      h += '<div class="pr-row"><div class="pr-l"><span>' + esc(r.name) + " @" + (r.o != null ? r.o.toFixed(2) : "—") +
+        " · 热度 " + (r.heat == null ? "—" : (r.heat * 100).toFixed(0) + "%") +
+        " · 实力 " + (r.strength == null ? "—" : (r.strength * 100).toFixed(0) + "%") +
+        " · 异常 " + (r.sAnom == null ? "—" : (r.sAnom * 100).toFixed(0) + "%") + "</span>" +
+        '<b class="num" style="color:' + col + '">' + (r.total * 100).toFixed(0) + "%</b></div>" +
+        '<div class="bar"><i style="width:' + (r.total * 100).toFixed(0) + (r === comp.top ? "%;background:var(--accent)" : "%") + '"></i></div></div>';
+    }
+    h += '<div class="hint" style="margin-top:6px">综合分 = 40% 价值(去水×一致预期) + 20% 逆热度 + 20% 实力 + 20% 异常加成。' +
+      (comp.heatAvail ? "" : "热度用赔率水平代理（无变动数据）。") + (comp.strAvail ? "" : "实力数据静态模式不可用。") + "</div>";
     return h;
   }
 
   function openSheet(m) {
     const ana = JC.analyzeMatch(m.pools);
-    const st8 = JC.starsOf(ana);
+    const ctx = {
+      heat: JC.heatFromOdds(ana, mvCache.get(m.id) || null),
+      strength: null,
+      anomaly: JC.anomalyScan(ana, state.jc.pop),
+    };
+    ana._anomaly = ctx.anomaly;
+    const comp = JC.composite(ana, ctx);
     let h = "<h3>" + esc(m.home) + " vs " + esc(m.away) + "</h3>" +
-      '<div class="sub-t">' + esc(m.league) + " · " + (wdLabel(m.date) ? wdLabel(m.date) + " " : "") + esc(m.date) + " " + esc(m.time) + " · 编号 " + esc(m.num) + "</div>" +
-      (st8 ? '<div class="sub-t" style="color:var(--fg);font-size:13px">主方向 <strong>' + esc(st8.name) + "</strong> " +
-        "★".repeat(st8.stars) + "☆".repeat(5 - st8.stars) +
-        " · 市场倾向 " + esc(st8.name) + " " + pctf(st8.pMax, 0) +
-        (st8.div != null ? " · 口径分歧 " + st8.div.toFixed(3) + (st8.div < 0.04 ? "（低）" : st8.div < 0.08 ? "（中）" : "（高）") : "") + "</div>" : "");
+      '<div class="sub-t">' + esc(m.league) + " · " + (wdLabel(m.date) ? wdLabel(m.date) + " " : "") + esc(m.date) + " " + esc(m.time) + " · 编号 " + esc(m.num) + "</div>";
+    h += '<div class="card"><div class="eyebrow">三指标综合推荐 · 去水 / 热度 / 实力（+ 异常加成）</div><div id="comp-body">' + compositeHTML(comp, ana) + "</div></div>";
     if (ana.had) {
-      h += '<div class="card"><div class="eyebrow">胜平负 · 去水市场概率（返还率 ' + (ana.had.payout * 100).toFixed(1) + "%）</div>";
+      h += '<div class="card"><div class="eyebrow">指标一 · 真实去水赔率（返还率 ' + (ana.had.payout * 100).toFixed(1) + "%）</div>";
       ["胜", "平", "负"].forEach((lab, i) => {
         const p = ana.had.probs[i], o = ana.had.odds[i];
         h += '<div class="pr-row"><div class="pr-l"><span>' + lab + " @" + (o != null ? o.toFixed(2) : "—") + "</span><b class=\"num\">" + pctf(p) + "</b></div>" +
@@ -606,25 +629,18 @@
       });
       h += "</div>";
     }
+    if (ctx.anomaly && ctx.anomaly.flags.length) {
+      h += '<div class="card"><div class="eyebrow">跨玩法异常检测（重点分析）</div>';
+      for (const f of ctx.anomaly.flags) h += '<div class="hint" style="margin:4px 0">▸ ' + esc(f) + "</div>";
+      h += '<div class="hint" style="margin-top:6px">例如：胜 @2.2 但半全场胜胜 @3.1 → 胜胜/胜 概率比显著偏高 → 市场重仓主胜，胜被低估。异常是结构信号，不是保证。</div></div>';
+    }
     if (ana.sources.length > 1) {
       h += '<div class="card"><div class="eyebrow">跨玩法互证（胜 / 平 / 负）</div>';
       for (const s of ana.sources) {
         h += '<div class="pr-row"><div class="pr-l"><span>' + esc(s.name) + (s.ref ? ' <span class="src-tag">（基准）</span>' : "") + "</span><b class=\"num\">" +
           s.probs.map((x) => pctf(x, 0)).join(" / ") + "</b></div></div>";
       }
-      h += '<div class="hint" style="margin-top:6px">各玩法各自定价，反推出的概率互有分歧时值得留意。</div></div>';
-    }
-    if (ana.consensus && ana.had && ana.value) {
-      h += '<div class="card"><div class="eyebrow">跨玩法一致预期 · 价值检测</div>';
-      ["胜", "平", "负"].forEach((lab, i) => {
-        const c = ana.consensus[i], v = ana.value[i], o = ana.had.odds[i];
-        const edge = v && v.edge != null ? v.edge : null;
-        const col = edge == null ? "var(--fg)" : edge >= 0.02 ? "var(--success)" : edge <= -0.03 ? "var(--danger)" : "var(--fg)";
-        h += '<div class="pr-row"><div class="pr-l"><span>' + lab + " @" + (o != null ? o.toFixed(2) : "—") + " · 一致概率 " + pctf(c) + "</span>" +
-          '<b class="num" style="color:' + col + '">' + (edge == null ? "—" : (edge >= 0 ? "+" : "") + (edge * 100).toFixed(1) + "% EV") + "</b></div>" +
-          '<div class="bar"><i style="width:' + (c * 100).toFixed(1) + (edge != null && edge >= 0.02 ? "%;background:var(--accent)" : "%") + '"></i></div></div>';
-      });
-      h += '<div class="hint" style="margin-top:8px">EV = 一致概率 × 赔率 − 1，≥ +2% 视为有价值方向；Kelly 建议仓位 = max(0, EV ÷ (赔率−1))，建议再除以 4 并设单场上限。价值是长期统计优势，不代表单场结果。</div></div>';
+      h += "</div>";
     }
     if (ana.hhadValue && ana.hhad) {
       h += '<div class="card"><div class="eyebrow">让球(' + esc(ana.hhadValue.line) + ") · 模型 vs 市场</div>";
@@ -647,11 +663,9 @@
       }
       if (ana.ttg) h += '<div class="hint" style="margin-top:6px">总进球玩法返还率 ' + (ana.ttg.payout * 100).toFixed(1) + "%，隐含平均进球 ≈ " + (ana.ttg.lambda != null ? ana.ttg.lambda.toFixed(2) : "—") + "</div>";
       h += "</div>";
-    } else if (ana.ttg && ana.ttg.lambda != null) {
-      h += '<div class="card"><div class="eyebrow">总进球</div><div class="hint">市场隐含平均总进球 ≈ ' + ana.ttg.lambda.toFixed(2) + "（本场缺比分玩法数据，无法重建泊松矩阵）</div></div>";
     }
-    h += '<div class="card"><div class="eyebrow">赔率变动（开盘 → 当前）</div><div id="mv-body"><div class="hint">加载中…</div></div></div>';
-    h += '<div class="card"><div class="eyebrow">基本面 · 排名 / 近况 / 交锋（500 源）</div><div id="fund-body"><div class="hint">加载中…</div></div></div>';
+    h += '<div class="card"><div class="eyebrow">指标二 · 市场热度（投注率代理）与赔率变动</div><div id="mv-body"><div class="hint">加载中…</div></div></div>';
+    h += '<div class="card"><div class="eyebrow">指标三 · 实力层面（排名 / 近况 / 交锋 · 500 源）</div><div id="fund-body"><div class="hint">加载中…</div></div></div>';
     h += '<div class="hint" style="margin:6px 2px 0">所有口径均来自官方赔率与公开数据的换算，属于概率估计而非预测。理性投注，量力而行。</div>';
     $("#sheet-body").innerHTML = h;
     $("#overlay").classList.add("on");
@@ -660,10 +674,20 @@
     loadMovement(m).then((r) => {
       const el = $("#mv-body");
       if (el) el.innerHTML = movementHTML(r);
+      const ctx2 = { heat: JC.heatFromOdds(ana, r), strength: ana._strength || null, anomaly: ctx.anomaly };
+      const c2 = JC.composite(ana, ctx2);
+      const cb = $("#comp-body");
+      if (cb) cb.innerHTML = compositeHTML(c2, ana);
     });
     loadFund(m).then((r) => {
       const el = $("#fund-body");
       if (el) el.innerHTML = fundHTML(r);
+      const st = JC.strengthFromFund(r);
+      ana._strength = st;
+      const ctx2 = { heat: JC.heatFromOdds(ana, mvCache.get(m.id) || null), strength: st, anomaly: ctx.anomaly };
+      const c2 = JC.composite(ana, ctx2);
+      const cb = $("#comp-body");
+      if (cb) cb.innerHTML = compositeHTML(c2, ana);
     });
   }
 

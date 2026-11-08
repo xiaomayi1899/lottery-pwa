@@ -21,7 +21,7 @@ def build(ssq, dlt):
     body = "window.__SNAPSHOT__=" + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + ";"
     assert "</script" not in body.lower(), "数据中含 </script>，需要转义"
     os.makedirs(os.path.join(ROOT, "data"), exist_ok=True)
-    out = os.path.join(ROOT, "data", "snapshot.js")
+    out = os.path.join(ROOT, "data", "snapshot.v5.js")
     with open(out, "w", encoding="utf-8") as f:
         f.write(body)
     print("已写入", out, len(body), "bytes")
