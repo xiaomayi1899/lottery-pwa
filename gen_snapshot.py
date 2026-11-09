@@ -7,7 +7,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from server import fetch_ssq, fetch_dlt, fetch_kl8, fetch_fc3d, fetch_p5
+from server import fetch_ssq, fetch_dlt, fetch_kl8, fetch_fc3d
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -31,11 +31,9 @@ def main():
     print("快乐8 %d 期（最新 %s）" % (len(kl8), kl8[-1]["issue"] if kl8 else "-"))
     fc3d = fetch_fc3d(1000)
     print("福彩3D %d 期（最新 %s）" % (len(fc3d), fc3d[-1]["issue"] if fc3d else "-"))
-    p5 = fetch_p5(1000)
-    print("排列五 %d 期（最新 %s）" % (len(p5), p5[-1]["issue"] if p5 else "-"))
     build({
         "builtAt": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-        "ssq": ssq, "dlt": dlt, "kl8": kl8, "fc3d": fc3d, "p5": p5,
+        "ssq": ssq, "dlt": dlt, "kl8": kl8, "fc3d": fc3d,
     })
 
 

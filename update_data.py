@@ -7,12 +7,12 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from server import fetch_ssq, fetch_dlt, fetch_kl8, fetch_fc3d, fetch_p5
+from server import fetch_ssq, fetch_dlt, fetch_kl8, fetch_fc3d
 from gen_snapshot import build as build_snapshot
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-GAMES = ("ssq", "dlt", "kl8", "fc3d", "p5")
-FETCHERS = {"ssq": fetch_ssq, "dlt": fetch_dlt, "kl8": fetch_kl8, "fc3d": fetch_fc3d, "p5": fetch_p5}
+GAMES = ("ssq", "dlt", "kl8", "fc3d")
+FETCHERS = {"ssq": fetch_ssq, "dlt": fetch_dlt, "kl8": fetch_kl8, "fc3d": fetch_fc3d}
 
 
 def write(name, obj):

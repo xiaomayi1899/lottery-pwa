@@ -289,88 +289,7 @@ def _fetch_fc3d_500(n=1000):
     return _normalize_500_rows(html, 3, 0, keep_order=True)[-n:]
 
 
-def fetch_p5(n=1000):
-    """排列5：多源链（体彩 34 → 福彩官网两种名称猜测 → 500 备用）。"""
-    for fn in (_fetch_p5_sporttery, _fetch_p5_cwl_pl5, _fetch_p5_cwl_p5, _fetch_p5_500):
-        try:
-            lst = fn(n)
-            if lst:
-                return lst
-        except Exception as e:
-            print("[p5] 源失败：%s" % str(e)[:100], file=sys.stderr)
-    return []
-
-
-def _fetch_p5_cwl_generic(name, n):
-    all_items = []
-    page = 1
-    while len(all_items) < n + 50 and page <= 60:
-        url = ("https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice"
-               "?name=%s&pageNo=%d&pageSize=100&systemType=PC" % (name, page))
-        data = _http_json(url, referer="https://www.cwl.gov.cn/")
-        result = (data or {}).get("result") or []
-        if not result:
-            break
-        all_items.extend(result)
-        if len(result) < 100:
-            break
-        page += 1
-        time.sleep(0.25)
-    out, seen = [], set()
-    for it in all_items:
-        code = str(it.get("code", "")).strip()
-        if not code or code in seen or (it.get("name") or "").find("排列") < 0:
-            continue
-        nums = [int(x) for x in str(it.get("red", "")).split(",") if x.strip().isdigit()]
-        if len(nums) != 5:
-            continue
-        seen.add(code)
-        out.append({"issue": code, "date": str(it.get("date", ""))[:10], "nums": nums})
-    out.sort(key=lambda d: d["issue"])
-    return out[-n:]
-
-
-def _fetch_p5_cwl_pl5(n=1000):
-    return _fetch_p5_cwl_generic("pl5", n)
-
-
-def _fetch_p5_cwl_p5(n=1000):
-    return _fetch_p5_cwl_generic("p5", n)
-
-
-def _fetch_p5_sporttery(n=1000):
-    all_items = []
-    page = 1
-    while len(all_items) < n + 50 and page <= 15:
-        url = ("https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry"
-               "?gameNo=34&provinceId=0&pageSize=100&isVerify=1&pageNo=%d" % page)
-        data = _http_json(url, referer="https://static.sporttery.cn/")
-        lst = ((data or {}).get("value") or {}).get("list") or []
-        if not lst:
-            break
-        all_items.extend(lst)
-        if len(lst) < 100:
-            break
-        page += 1
-        time.sleep(0.25)
-    out, seen = [], set()
-    for it in all_items:
-        code = str(it.get("lotteryDrawNum", "")).strip()
-        nums = [int(p) for p in str(it.get("lotteryDrawResult", "")).split() if p.strip().isdigit()]
-        if not code or code in seen or len(nums) != 5:
-            continue
-        seen.add(code)
-        out.append({"issue": code, "date": str(it.get("lotteryDrawTime", ""))[:10], "nums": nums})
-    out.sort(key=lambda d: d["issue"])
-    return out[-n:]
-
-
-def _fetch_p5_500(n=1000):
-    html = _http_text_page("https://datachart.500.com/p5/history/newinc/history.php?limit=%d" % min(n, 5000))
-    return _normalize_500_rows(html, 5, 0, keep_order=True)[-n:]
-
-
-FETCHERS = {"ssq": fetch_ssq, "dlt": fetch_dlt, "kl8": fetch_kl8, "fc3d": fetch_fc3d, "p5": fetch_p5}
+FETCHERS = {"ssq": fetch_ssq, "dlt": fetch_dlt, "kl8": fetch_kl8, "fc3d": fetch_fc3d}
 DISK = {"ssq": os.path.join(DATA_DIR, "cache_ssq.json"),
         "dlt": os.path.join(DATA_DIR, "cache_dlt.json")}
 
@@ -578,7 +497,7 @@ class Handler(BaseHTTPRequestHandler):
         path = path.rstrip("/") or "/"
         if path == "/":
             return self._static("index.html")
-        if path in ("/api/ssq", "/api/dlt", "/api/kl8", "/api/fc3d", "/api/p5"):
+        if path in ("/api/ssq", "/api/dlt", "/api/kl8", "/api/fc3d"):
             g = path.split("/")[-1]
             n = 1000
             m = re.search(r"(?:^|&)n=(\d{1,4})", qs)

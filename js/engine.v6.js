@@ -1,5 +1,5 @@
 /* engine.v6.js — 数字彩推荐引擎 v6.3（参考开源思路，致谢见下方与说明页）
-   彩种：双色球 / 大乐透 / 快乐8 / 福彩3D / 排列五，统一「近 50 期走势形态」框架。
+   彩种：双色球 / 大乐透 / 快乐8 / 福彩3D，统一「近 50 期走势形态」框架。
    v6.2：一阶马尔可夫转移形态预测（55/45 混合回退）· 条件化和值带 · 对数冷热 + 指数遗漏平滑评分
    v6.3（开源方法落地）：共现频率矩阵（wjt0321/lottery-predictor）· 同尾号软约束（同上）·
      EWMA 近期加权 · 卡方均匀性检验 trust 降权防过拟合 · Bootstrap 稳定性选择（Callam7/LottoPipeline 的
@@ -13,7 +13,6 @@
     dlt: { key: "dlt", name: "大乐透", full: "超级大乐透", type: "pick", fn: 35, fk: 5, draw: 5, bn: 12, bk: 2, zones: [12, 24], zoneNames: ["一区", "二区", "三区"] },
     kl8: { key: "kl8", name: "快乐8", full: "快乐8（选十）", type: "pick", fn: 80, fk: 10, draw: 20, bn: 0, bk: 0, zones: [20, 40, 60], zoneNames: ["一区", "二区", "三区", "四区"], zone4: true },
     fc3d: { key: "fc3d", name: "福彩3D", full: "福彩3D", type: "digits", pos: 3, max: 9, posNames: ["百位", "十位", "个位"] },
-    p5: { key: "p5", name: "排列五", full: "排列5", type: "digits", pos: 5, max: 9, posNames: ["万位", "千位", "百位", "十位", "个位"] },
   };
   const WINDOW = 50;
   const PRIMES = [1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79];
@@ -441,7 +440,7 @@
     return out;
   }
 
-  /* ---------- 数字型：3D / 排列五 ---------- */
+  /* ---------- 数字型：3D ---------- */
   function buildDigitStats(cfg, draws) {
     const D = draws.length;
     const P = cfg.pos;
@@ -625,7 +624,7 @@
       "预测形态：和值 " + sumBand[0] + "–" + sumBand[1] + "（条件化）· " + oddMode + " 奇" + (cfg.pos - oddMode) + "偶 · " + bigMode + " 大" + (cfg.pos - bigMode) + "小 · 跨度 " + spanMode + (ts.zu ? " · 组六为主" : ""),
       "评分构成：各位一阶马尔可夫转移（上期数字→本期）+ 对数冷热 + 指数遗漏 + 012路亲和 + Bootstrap 稳定性",
       "合成方法：各位在「综合 / 热号 / 回补 / 均衡」四种评分下取最优数字，满足和值带约束；直选允许各位重号",
-      "3D 提示：主推一注直选 + 对应组选（号码排序后即组选）；排列五同思路",
+      "3D 提示：主推一注直选 + 对应组选（号码排序后即组选）",
       "⚠ 所有推荐均为统计整理输出，与随机对照的中奖概率完全相同",
     ], cand: { f: new Set(fMain), b: null }, why: "马尔可夫转移 + 平滑评分合成" });
     const bt = (function () {

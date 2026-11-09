@@ -1,4 +1,4 @@
-/* app.v6.js — 彩票预测助手 页面逻辑（纯数字彩五版：双色球/大乐透/快乐8/福彩3D/排列五）
+/* app.v6.js — 彩票预测助手 页面逻辑（纯数字彩四版：双色球/大乐透/快乐8/福彩3D）
    推荐：近 50 期走势形态系统（engine.v6.js）；数据：官方接口/静态数据/快照三层降级 */
 (() => {
   "use strict";
@@ -8,12 +8,12 @@
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const Engine = window.Engine;
   const GAMES = Engine.GAMES;
-  const KEYS = ["ssq", "dlt", "kl8", "fc3d", "p5"];
+  const KEYS = ["ssq", "dlt", "kl8", "fc3d"];
 
   /* ============ 数据层 ============ */
   const LS_KEY = "lph_data_v2";
-  const SNAP = window.__SNAPSHOT__ || { builtAt: "", ssq: [], dlt: [], kl8: [], fc3d: [], p5: [] };
-  window.DATA = { ssq: [], dlt: [], kl8: [], fc3d: [], p5: [] };
+  const SNAP = window.__SNAPSHOT__ || { builtAt: "", ssq: [], dlt: [], kl8: [], fc3d: [] };
+  window.DATA = { ssq: [], dlt: [], kl8: [], fc3d: [] };
 
   const store = {};
   const state = {};
@@ -147,27 +147,11 @@
     return out.slice(-1000);
   }
 
-  async function fetchP5Live() {
-    const out = [];
-    const j = await fetchJSON("https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry?gameNo=34&provinceId=0&pageSize=100&isVerify=1&pageNo=1", 15000);
-    const lst = (j.value && j.value.list) || [];
-    for (const it of lst) {
-      const code = String(it.lotteryDrawNum || "").trim();
-      const nums = String(it.lotteryDrawResult || "").split(/\s+/).map(Number).filter((x) => x >= 0);
-      if (!code || nums.length !== 5) continue;
-      out.push({ issue: code, date: String(it.lotteryDrawTime || "").slice(0, 10), nums: nums });
-    }
-    if (!out.length) throw new Error("接口无排列五数据");
-    out.sort((a, b) => a.issue.localeCompare(b.issue));
-    return out.slice(-1000);
-  }
-
   const SOURCES = {
     ssq: [() => fetchNorm("/api/ssq?n=1000"), () => fetchNorm("./data/ssq.json")],
     dlt: [fetchDltLive, () => fetchNorm("/api/dlt?n=1000"), () => fetchNorm("./data/dlt.json")],
     kl8: [() => fetchNorm("/api/kl8?n=1000"), () => fetchNorm("./data/kl8.json")],
     fc3d: [() => fetchNorm("/api/fc3d?n=1000"), () => fetchNorm("./data/fc3d.json")],
-    p5: [fetchP5Live, () => fetchNorm("/api/p5?n=1000"), () => fetchNorm("./data/p5.json")],
   };
 
   async function refreshGame(g, silent) {
@@ -178,9 +162,8 @@
     }
     if (!list) {
       if (store[g].list.length) setNet("ok", "官方接口未响应 · 使用本地数据");
-      else if (g === "p5") setNet("", "排列五 官方暂无公开接口 · 其余彩种正常");
       else setNet("err", GAMES[g].name + " 数据源暂不可用");
-      if (!silent) toast(GAMES[g].name + (g === "p5" ? "官方暂无公开数据接口（已知限制）" : "更新失败：所有数据来源均不可达"));
+      if (!silent) toast(GAMES[g].name + "更新失败：所有数据来源均不可达");
       return false;
     }
     const cur = store[g].list;
@@ -391,8 +374,7 @@
     const el = $("#page-" + g);
     let h = "";
     if (!s.list.length) {
-      const p5note = g === "p5" ? '<div class="hint" style="margin-top:8px">体彩官方未提供排列五公开数据接口（已全量排查），接口开放后此页自动可用；其余四个彩种不受影响。</div>' : "";
-      h += '<div class="state-box"><strong>' + esc(cfg.name) + (g === "p5" ? " 官方暂无公开数据接口" : " 数据未就绪") + "</strong>" + (g === "p5" ? "" : "从官方接口获取历史开奖后即可开始分析") + p5note +
+      h += '<div class="state-box"><strong>' + esc(cfg.name) + ' 数据未就绪</strong>从官方接口获取历史开奖后即可开始分析' +
         '<div><button class="btn primary" data-act="refresh">获取数据</button></div></div>';
       el.innerHTML = h;
       st.rendered = true;
