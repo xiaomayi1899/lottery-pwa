@@ -91,7 +91,7 @@ def _http_text_page(url, timeout=20):
     return raw.decode("utf-8", "ignore")
 
 
-def _normalize_500_rows(html, front_n, back_n, ssq_full_issue=False):
+def _normalize_500_rows(html, front_n, back_n, ssq_full_issue=False, keep_order=False):
     """解析 500 彩票网 history 页表格行；自动剔除 HTML 注释，5 位双色球期号补全为 7 位。"""
     html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
     rows = re.findall(r'<tr[^>]*class="t_tr1"[^>]*>(.*?)</tr>', html, re.S)
@@ -116,8 +116,11 @@ def _normalize_500_rows(html, front_n, back_n, ssq_full_issue=False):
             continue
         if ssq_full_issue and len(code) == 5:
             code = "20" + code
-        out.append({"issue": code, "date": date[:10],
-                    "nums": sorted(nums[:front_n]) + sorted(nums[front_n:front_n + back_n])})
+        if keep_order:
+            out.append({"issue": code, "date": date[:10], "nums": nums[:front_n]})
+        else:
+            out.append({"issue": code, "date": date[:10],
+                        "nums": sorted(nums[:front_n]) + sorted(nums[front_n:front_n + back_n])})
     out.sort(key=lambda d: d["issue"])
     return out
 
@@ -211,7 +214,163 @@ def fetch_dlt_official(n=1000):
     return lst[-n:]
 
 
-FETCHERS = {"ssq": fetch_ssq, "dlt": fetch_dlt}
+def fetch_kl8(n=1000):
+    """快乐8（福彩）：cwl 官方接口，red 字段为 20 个号码。"""
+    all_items = []
+    page = 1
+    while len(all_items) < n + 50 and page <= 15:
+        url = ("https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice"
+               "?name=kl8&pageNo=%d&pageSize=100&systemType=PC" % page)
+        data = _http_json(url, referer="https://www.cwl.gov.cn/ygkj/wqkjgg/kl8/")
+        result = (data or {}).get("result") or []
+        if not result:
+            break
+        all_items.extend(result)
+        if len(result) < 100:
+            break
+        page += 1
+        time.sleep(0.25)
+    out, seen = [], set()
+    for it in all_items:
+        code = str(it.get("code", "")).strip()
+        if not code or code in seen:
+            continue
+        nums = [int(x) for x in str(it.get("red", "")).split(",") if x.strip().isdigit()]
+        if len(nums) != 20:
+            continue
+        seen.add(code)
+        out.append({"issue": code, "date": str(it.get("date", ""))[:10], "nums": sorted(nums)})
+    out.sort(key=lambda d: d["issue"])
+    return out[-n:]
+
+
+def fetch_fc3d(n=1000):
+    """福彩3D：cwl 官方（red=百十个，保持顺序），失败转 500 备用。"""
+    try:
+        lst = _fetch_fc3d_cwl(n)
+        if lst:
+            return lst
+    except Exception as e:
+        print("[fc3d] 福彩官方接口失败，改用备用源：%s" % str(e)[:120], file=sys.stderr)
+    return _fetch_fc3d_500(n)
+
+
+def _fetch_fc3d_cwl(n=1000):
+    all_items = []
+    page = 1
+    while len(all_items) < n + 50 and page <= 60:
+        url = ("https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice"
+               "?name=3d&pageNo=%d&pageSize=100&systemType=PC" % page)
+        data = _http_json(url, referer="https://www.cwl.gov.cn/ygkj/wqkjgg/3d/")
+        result = (data or {}).get("result") or []
+        if not result:
+            break
+        all_items.extend(result)
+        if len(result) < 100:
+            break
+        page += 1
+        time.sleep(0.25)
+    out, seen = [], set()
+    for it in all_items:
+        code = str(it.get("code", "")).strip()
+        if not code or code in seen:
+            continue
+        nums = [int(x) for x in str(it.get("red", "")).split(",") if x.strip().isdigit()]
+        if len(nums) != 3:
+            continue
+        seen.add(code)
+        out.append({"issue": code, "date": str(it.get("date", ""))[:10], "nums": nums})
+    out.sort(key=lambda d: d["issue"])
+    return out[-n:]
+
+
+def _fetch_fc3d_500(n=1000):
+    html = _http_text_page("https://datachart.500.com/fc3d/history/newinc/history.php?limit=%d" % min(n, 5000))
+    return _normalize_500_rows(html, 3, 0, keep_order=True)[-n:]
+
+
+def fetch_p5(n=1000):
+    """排列5：多源链（体彩 34 → 福彩官网两种名称猜测 → 500 备用）。"""
+    for fn in (_fetch_p5_sporttery, _fetch_p5_cwl_pl5, _fetch_p5_cwl_p5, _fetch_p5_500):
+        try:
+            lst = fn(n)
+            if lst:
+                return lst
+        except Exception as e:
+            print("[p5] 源失败：%s" % str(e)[:100], file=sys.stderr)
+    return []
+
+
+def _fetch_p5_cwl_generic(name, n):
+    all_items = []
+    page = 1
+    while len(all_items) < n + 50 and page <= 60:
+        url = ("https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice"
+               "?name=%s&pageNo=%d&pageSize=100&systemType=PC" % (name, page))
+        data = _http_json(url, referer="https://www.cwl.gov.cn/")
+        result = (data or {}).get("result") or []
+        if not result:
+            break
+        all_items.extend(result)
+        if len(result) < 100:
+            break
+        page += 1
+        time.sleep(0.25)
+    out, seen = [], set()
+    for it in all_items:
+        code = str(it.get("code", "")).strip()
+        if not code or code in seen or (it.get("name") or "").find("排列") < 0:
+            continue
+        nums = [int(x) for x in str(it.get("red", "")).split(",") if x.strip().isdigit()]
+        if len(nums) != 5:
+            continue
+        seen.add(code)
+        out.append({"issue": code, "date": str(it.get("date", ""))[:10], "nums": nums})
+    out.sort(key=lambda d: d["issue"])
+    return out[-n:]
+
+
+def _fetch_p5_cwl_pl5(n=1000):
+    return _fetch_p5_cwl_generic("pl5", n)
+
+
+def _fetch_p5_cwl_p5(n=1000):
+    return _fetch_p5_cwl_generic("p5", n)
+
+
+def _fetch_p5_sporttery(n=1000):
+    all_items = []
+    page = 1
+    while len(all_items) < n + 50 and page <= 15:
+        url = ("https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry"
+               "?gameNo=34&provinceId=0&pageSize=100&isVerify=1&pageNo=%d" % page)
+        data = _http_json(url, referer="https://static.sporttery.cn/")
+        lst = ((data or {}).get("value") or {}).get("list") or []
+        if not lst:
+            break
+        all_items.extend(lst)
+        if len(lst) < 100:
+            break
+        page += 1
+        time.sleep(0.25)
+    out, seen = [], set()
+    for it in all_items:
+        code = str(it.get("lotteryDrawNum", "")).strip()
+        nums = [int(p) for p in str(it.get("lotteryDrawResult", "")).split() if p.strip().isdigit()]
+        if not code or code in seen or len(nums) != 5:
+            continue
+        seen.add(code)
+        out.append({"issue": code, "date": str(it.get("lotteryDrawTime", ""))[:10], "nums": nums})
+    out.sort(key=lambda d: d["issue"])
+    return out[-n:]
+
+
+def _fetch_p5_500(n=1000):
+    html = _http_text_page("https://datachart.500.com/p5/history/newinc/history.php?limit=%d" % min(n, 5000))
+    return _normalize_500_rows(html, 5, 0, keep_order=True)[-n:]
+
+
+FETCHERS = {"ssq": fetch_ssq, "dlt": fetch_dlt, "kl8": fetch_kl8, "fc3d": fetch_fc3d, "p5": fetch_p5}
 DISK = {"ssq": os.path.join(DATA_DIR, "cache_ssq.json"),
         "dlt": os.path.join(DATA_DIR, "cache_dlt.json")}
 
@@ -355,164 +514,6 @@ def qr_png():
     return data
 
 
-# ---------- 基本面（竞彩排名 / 近期战绩 / 交锋，源：500 彩票网，电脑服务模式专用） ----------
-
-FUND_UA = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,*/*",
-    "Referer": "https://live.500.com/",
-}
-_fund_cache = {}
-FUND_LOCK = threading.Lock()
-
-
-def _http_text(url, referer=None, timeout=20):
-    h = dict(FUND_UA)
-    if referer:
-        h["Referer"] = referer
-    req = urllib.request.Request(url, headers=h)
-    with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
-        raw = r.read()
-    for enc in ("utf-8", "gbk", "gb18030"):
-        try:
-            return raw.decode(enc)
-        except Exception:
-            pass
-    return raw.decode("utf-8", "ignore")
-
-
-def _fund_cached(key, ttl, builder):
-    now = time.time()
-    with FUND_LOCK:
-        hit = _fund_cache.get(key)
-        if hit and hit[0] > now:
-            return hit[1]
-    val = builder()
-    with FUND_LOCK:
-        _fund_cache[key] = (now + ttl, val)
-    return val
-
-
-def _parse_jczq_row(html, num):
-    idx = html.find(">%s<" % num)
-    if idx < 0:
-        idx = html.find(num)
-    if idx < 0:
-        return None
-    start = html.rfind("<tr", 0, idx)
-    end = html.find("</tr>", idx)
-    chunk = html[start:end if end > 0 else idx + 4000]
-    fid = re.search(r'fid="(\d+)"', chunk)
-    ranks = re.findall(r"\[(\d+)\]", chunk)
-    teams = re.findall(r'liansai\.500\.com/team/(\d+)/"[^>]*>([^<]+)</a>', chunk)
-    hand = re.search(r'sp_rq">\((-?[\d.]+)\)', chunk)
-    tm = re.search(r"(\d{2}-\d{2} \d{2}:\d{2})", chunk)
-    league = re.search(r'zuqiu-(\d+)/"[^>]*>([^<]+)</a>', chunk)
-    if not fid or len(teams) < 2:
-        return None
-    return {
-        "fid": fid.group(1),
-        "homeTeamId": teams[0][0],
-        "homeName": teams[0][1].strip(),
-        "awayTeamId": teams[1][0],
-        "awayName": teams[1][1].strip(),
-        "rankHome": int(ranks[0]) if ranks else None,
-        "rankAway": int(ranks[1]) if len(ranks) > 1 else None,
-        "handicap": hand.group(1) if hand else None,
-        "time": tm.group(1) if tm else None,
-        "league": league.group(2) if league else None,
-    }
-
-
-def _parse_team_matches(html):
-    out = []
-    for m in re.finditer(r'<td class="td_time">([\d-]{10})</td>(.*?)(?=<td class="td_time">|</tbody>)', html, re.S):
-        date, seg = m.group(1), m.group(2)
-        comp = re.search(r'zuqiu-(\d+)/"[^>]*>([^<]+)</a>', seg)
-        ht = re.search(r'td_lteam">.*?team/(\d+)/"[^>]*>([^<]+)</a>', seg, re.S)
-        at = re.search(r'td_rteam">.*?team/(\d+)/"[^>]*>([^<]+)</a>', seg, re.S)
-        segt = re.sub(r"<[^>]+>", " ", seg)
-        sc = re.search(r"(\d+)\s*:\s*(\d+)", segt)
-        res = re.search(r"(胜|平|负)", segt)
-        if not (comp and ht and at):
-            continue
-        rec = {
-            "date": date,
-            "comp": comp.group(2),
-            "home": ht.group(2).strip(),
-            "away": at.group(2).strip(),
-            "res": res.group(1) if res else None,
-        }
-        if sc:
-            rec["hs"], rec["as"] = int(sc.group(1)), int(sc.group(2))
-        out.append(rec)
-    return out
-
-
-def _team_perspective(matches, team_name):
-    out = []
-    for m in matches:
-        if not m.get("res") or "hs" not in m:
-            continue
-        home = m["home"] == team_name
-        out.append({
-            "date": m["date"],
-            "comp": m["comp"],
-            "home": m["home"],
-            "away": m["away"],
-            "opp": m["away"] if home else m["home"],
-            "teamIsHome": home,
-            "teamGoals": m["hs"] if home else m["as"],
-            "oppGoals": m["as"] if home else m["hs"],
-            "score": "%d:%d" % (m["hs"], m["as"]),
-            "res": m["res"],
-        })
-    return out
-
-
-def _fetch_team_matches(team_id, name):
-    def build():
-        html = _http_text("https://liansai.500.com/team/%s/" % team_id, referer="https://live.500.com/")
-        return _team_perspective(_parse_team_matches(html), name)
-    val = _fund_cached("team:%s:%s" % (team_id, name), 1800, build)
-    return val if isinstance(val, list) else []
-
-
-def fetch_fund(date, num):
-    def build_for(d):
-        html = _http_text("https://live.500.com/jczq.php?e=%s" % d, referer="https://live.500.com/")
-        return _parse_jczq_row(html, num)
-
-    def build():
-        row = None
-        used = None
-        base = datetime.datetime.strptime(date, "%Y-%m-%d")
-        # 500 按竞彩日分组：凌晨场编号挂在前一天页面，故前后各试一天
-        for delta in (0, -1, 1):
-            d = (base + datetime.timedelta(days=delta)).strftime("%Y-%m-%d")
-            row = _fund_cached("row:%s:%s" % (d, num), 600, lambda d=d: build_for(d))
-            if isinstance(row, dict) and row:
-                used = d
-                break
-        if not row:
-            return {"found": False, "reason": "当日前后赛程页均未找到该编号场次"}
-        home_matches = _fetch_team_matches(row["homeTeamId"], row["homeName"])
-        away_matches = _fetch_team_matches(row["awayTeamId"], row["awayName"])
-        h2h = [m for m in home_matches if m.get("opp") == row["awayName"]]
-        return {
-            "found": True,
-            "fid": row["fid"],
-            "league": row["league"],
-            "handicap": row["handicap"],
-            "time": row["time"],
-            "matchDateOn500": used,
-            "home": {"name": row["homeName"], "rank": row["rankHome"], "matches": home_matches},
-            "away": {"name": row["awayName"], "rank": row["rankAway"], "matches": away_matches},
-            "h2h": h2h,
-        }
-    return _fund_cached("fund:%s:%s" % (date, num), 600, build)
-
-
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
@@ -577,7 +578,7 @@ class Handler(BaseHTTPRequestHandler):
         path = path.rstrip("/") or "/"
         if path == "/":
             return self._static("index.html")
-        if path in ("/api/ssq", "/api/dlt"):
+        if path in ("/api/ssq", "/api/dlt", "/api/kl8", "/api/fc3d", "/api/p5"):
             g = path.split("/")[-1]
             n = 1000
             m = re.search(r"(?:^|&)n=(\d{1,4})", qs)
@@ -587,29 +588,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(get_game(g))
             except Exception as e:
                 self._send_json({"error": str(e)}, 502)
-            return
-        if path == "/api/jc":
-            pool = "hhad,had,crs,ttg,hafu"
-            m = re.search(r"(?:^|&)poolCode=([\w,]{1,80})", qs)
-            if m:
-                pool = m.group(1)
-            try:
-                body, ctype = get_jc(pool)
-                self._send(200, body, ctype)
-            except Exception as e:
-                self._send_json({"error": str(e)}, 502)
-            return
-        if path == "/api/fund":
-            md = re.search(r"(?:^|&)date=(\d{4}-\d{2}-\d{2})", qs)
-            mn = re.search(r"(?:^|&)num=([^&]{2,24})", qs)
-            if not (md and mn):
-                self._send_json({"found": False, "reason": "参数缺失"}, 400)
-                return
-            num = urllib.parse.unquote(mn.group(1))
-            try:
-                self._send_json(fetch_fund(md.group(1), num))
-            except Exception as e:
-                self._send_json({"found": False, "reason": str(e)[:120]}, 502)
             return
         if path == "/qr.png":
             data = qr_png()
