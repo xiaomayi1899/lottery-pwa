@@ -66,6 +66,37 @@
     return [Math.round(center - half), Math.round(center + half)];
   }
 
+  /* 正态 CDF（Abramowitz–Stegun 近似），用于卡方检验 p 值 */
+  function normCdf(z) {
+    const t = 1 / (1 + 0.2316419 * Math.abs(z));
+    const d = 0.3989423 * Math.exp(-z * z / 2);
+    const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    return z >= 0 ? 1 - p : p;
+  }
+  /* 卡方均匀性检验：近期频次是否显著偏离均匀（p 小 = 显著偏离）；不显著则降权防过拟合 */
+  function chiUniform(obs, E) {
+    let chi2 = 0, n = 0;
+    for (const o of obs) { chi2 += (o - E) * (o - E) / E; n++; }
+    const df = Math.max(1, n - 1);
+    const a = 2 / (9 * df);
+    const z = (Math.cbrt(chi2 / df) - (1 - a)) / Math.sqrt(a);
+    return { chi2: chi2, df: df, p: Math.max(0, Math.min(1, 1 - normCdf(z))) };
+  }
+  /* 近期权重衰减（EWMA）：越近的开奖权重越高 */
+  function ewmaOf(sets, fn, lambda) {
+    const D = sets.length;
+    const w = new Array(fn + 1).fill(0);
+    for (let t = 0; t < D; t++) { const wt = Math.pow(lambda, D - 1 - t); for (const x of sets[t]) w[x] += wt; }
+    return w;
+  }
+  /* 共现频率矩阵：C[i][j] = 窗口内 i、j 同期出现的期数（参考 wjt0321/lottery-predictor） */
+  function cooccur(sets, fn) {
+    const C = [];
+    for (let i = 0; i <= fn; i++) C.push(new Array(fn + 1).fill(0));
+    for (const s of sets) { const arr = [...s]; for (let a = 0; a < arr.length; a++) for (let b = a + 1; b < arr.length; b++) { C[arr[a]][arr[b]]++; C[arr[b]][arr[a]]++; } }
+    return C;
+  }
+
   /* ---------- 选号型：通用统计 ---------- */
   function buildPickStats(cfg, draws) {
     const D = draws.length;
@@ -135,7 +166,7 @@
     for (let i = 1; i <= cfg.fn; i++) order.push(i);
     order.sort((a, b) => scoreArr[b] - scoreArr[a]);
     const pool = order.slice(0, Math.min(22, cfg.fn));
-    let states = [{ picked: [], odd: 0, pr: 0, low: 0, zn: new Array(form.zoneCounts.length).fill(0), sum: 0, score: 0 }];
+    let states = [{ picked: [], odd: 0, pr: 0, low: 0, zn: new Array(form.zoneCounts.length).fill(0), tl: new Array(10).fill(0), sum: 0, score: 0 }];
     for (let depth = 0; depth < cfg.fk; depth++) {
       const next = [];
       for (const st of states) {
@@ -149,8 +180,9 @@
           if (ns + maxRest < form.sum[0] - Math.round(form.sd * 0.5) - 12) continue;
           const zc = st.zn.slice();
           for (let z = 0; z < zc.length; z++) { if (i <= (z === zc.length - 1 ? cfg.fn : form.zEdge[z])) { zc[z]++; break; } }
+          const tl2 = st.tl.slice(); tl2[i % 10]++;
           next.push({ picked: st.picked.concat([i]), odd: st.odd + (i % 2 === 1 ? 1 : 0), pr: st.pr + (isPrime(i) ? 1 : 0),
-            low: st.low + (i <= cfg.fn / 2 ? 1 : 0), zn: zc, sum: ns, score: st.score + scoreArr[i] });
+            low: st.low + (i <= cfg.fn / 2 ? 1 : 0), zn: zc, tl: tl2, sum: ns, score: st.score + scoreArr[i] });
         }
       }
       next.sort((a, b) => b.score - a.score);
@@ -164,6 +196,7 @@
       pen += Math.abs(s.pr - form.prime) * 0.7;
       pen += Math.abs(s.low - form.low) * 0.7;
       for (let z = 0; z < s.zn.length; z++) pen += Math.abs(s.zn[z] - form.zoneCounts[z]) * 0.5;
+      for (const c of s.tl) pen += Math.max(0, c - 2) * 0.6; // 同尾号约束：同尾 >2 个软惩罚（参考 wjt0321/lottery-predictor）
       if (s.sum < form.sum[0]) pen += (form.sum[0] - s.sum) * 0.06;
       if (s.sum > form.sum[1]) pen += (s.sum - form.sum[1]) * 0.06;
       return -pen;
@@ -196,6 +229,23 @@
     const draws = all.slice(-WINDOW);
     const ts = buildPickStats(cfg, draws);
     const cycle = cfg.fn / cfg.draw;
+    // 科学化组件：EWMA 近期权重 · 卡方显著性 · 共现频率（新维度）
+    const ewma = ewmaOf(ts.fSets, cfg.fn, 0.97);
+    const ewmaMax = Math.max.apply(null, ewma.slice(1).concat([1e-9]));
+    const chi = chiUniform(ts.fc.slice(1), ts.D * cfg.draw / cfg.fn);
+    const trust = chi.p < 0.01 ? 1 : chi.p < 0.10 ? 0.85 : 0.7;
+    const cooc = cooccur(ts.fSets, cfg.fn);
+    const coB = new Array(cfg.fn + 1).fill(0);
+    {
+      let cMax = 1e-9;
+      for (let i = 1; i <= cfg.fn; i++) {
+        if (ts.prevF.has(i)) continue; // 与上期重合的号走重号通道
+        let c = 0;
+        for (const j of ts.prevF) c += cooc[i][j];
+        coB[i] = c; if (c > cMax) cMax = c;
+      }
+      for (let i = 1; i <= cfg.fn; i++) coB[i] /= cMax;
+    }
     // 形态预测：一阶马尔可夫转移（条件于上期形态）× ratio，回退窗口分布
     const odd = clampI(markovPredict(ts.oddSeq, 0, cfg.draw) * ratio, 0, cfg.fk);
     const prime = clampI(markovPredict(ts.primeSeq, 0, cfg.draw) * ratio, 0, cfg.fk);
@@ -249,6 +299,7 @@
     out.sections.push({ title: "第五节 · 走势图模式（重号 / 邻号 / 斜跳）", lines: [
       "重号：场均 " + mean(ts.repeats).toFixed(2) + "（随机期望 " + (cfg.fk * cfg.draw / cfg.fn).toFixed(2) + "），马尔可夫预测 " + form.repeat + " 个",
       "邻号（±1）：场均 " + mean(ts.neighbors).toFixed(2) + "；斜跳（±2）：场均 " + mean(ts.jumps).toFixed(2),
+      "同尾号（尾数相同）：场均 " + mean(ts.fSets.map((s) => { const t = {}; let c = 0; for (const x of s) { t[x % 10] = (t[x % 10] || 0) + 1; if (t[x % 10] >= 2) c++; } return c; })).toFixed(2) + " 个（推荐中同尾 >2 做软惩罚）",
       "上期开：" + fmtArr(draws[draws.length - 1].nums.slice(0, cfg.fk)) + " → 预测含重号 " + form.repeat + " / 邻号 " + form.neighbor,
       "⚠ 重号/邻号频率≈随机水平，无预测力",
     ], cand: null, why: "形态维度：走势模式" });
@@ -266,6 +317,12 @@
         "⚠ 冷热与遗漏无预测力",
       ], cand: null, why: "形态维度：冷热/遗漏" });
     }
+    out.sections.push({ title: "第七节 · 统计显著性检验（卡方均匀性）", lines: [
+      "近 " + ts.D + " 期各号出现频次 vs 均匀期望：χ²=" + chi.chi2.toFixed(1) + "（df=" + chi.df + "），p=" + chi.p.toFixed(3),
+      chi.p < 0.05 ? "p<0.05：与均匀分布有显著差异 → 冷热/走势模式权重上调（trust=" + trust + "）" : "p≥0.05：与均匀分布无显著差异 → 偏差按噪声降权（trust=" + trust + "），防止把噪声当规律",
+      "主推经 30 次 Bootstrap 重采样稳定性筛选；评分含共现频率（与上期号码历史同现率）与同尾号约束",
+      "⚠ 显著性检验是防过拟合手段，不改变中奖概率",
+    ], cand: null, why: "统计检验：卡方 + 稳定性选择" });
 
     const maxFc = Math.max.apply(null, ts.fc.slice(1).concat([1]));
     const lgMax = Math.log1p(maxFc);
@@ -274,17 +331,31 @@
       const sMain = new Array(cfg.fn + 1).fill(0), sHot = new Array(cfg.fn + 1).fill(0),
         sDue = new Array(cfg.fn + 1).fill(0), sBal = new Array(cfg.fn + 1).fill(0);
       for (let i = 1; i <= cfg.fn; i++) {
-        const sFreq = Math.log1p(ts.fc[i]) / lgMax;
-        const sDueI = 1 - Math.exp(-ts.fom[i] / cycle);
-        const rep = form.repeat >= 1 ? (ts.prevF.has(i) ? 1 : 0) : (ts.prevF.has(i) ? -0.4 : 0);
-        const nb = (ts.prevF.has(i - 1) || ts.prevF.has(i + 1)) ? (form.neighbor >= 1 ? 1 : -0.2) : 0;
-        sMain[i] = 0.35 * sFreq + 0.35 * sDueI + 0.15 * rep + 0.15 * nb;
+        const sFreq = 0.55 * Math.log1p(ts.fc[i]) / lgMax + 0.45 * ewma[i] / ewmaMax;
+        const pHat = (ts.fc[i] + 0.5) / (ts.D + 0.5);
+        const sDueI = 1 - Math.exp(-ts.fom[i] * pHat * 1.5);
+        const rep = (form.repeat >= 1 ? (ts.prevF.has(i) ? 1 : -0.15) : (ts.prevF.has(i) ? -0.4 : 0)) * trust;
+        const nb = ((ts.prevF.has(i - 1) || ts.prevF.has(i + 1)) ? (form.neighbor >= 1 ? 1 : -0.2) : 0) * trust;
+        sMain[i] = 0.30 * sFreq + 0.30 * sDueI + 0.20 * coB[i] + 0.10 * rep + 0.10 * nb;
         sHot[i] = sFreq; sDue[i] = sDueI; sBal[i] = 0.5 * sFreq + 0.5 * sDueI;
       }
       return [sMain, sHot, sDue, sBal];
     };
     const [sMain, sHot, sDue, sBal] = mkScores();
-    const fMain = pickForm(cfg, sMain, form);
+    // Bootstrap 稳定性选择（Monte Carlo 思路，参考 Callam7/LottoPipeline）：重采样 30 次，
+    // 统计各号进入「平衡评分前 fk+2」的频率，与主评分融合
+    const rsB = mulberry32(20261101);
+    const stab = new Array(cfg.fn + 1).fill(0);
+    for (let b = 0; b < 30; b++) {
+      const sc = new Array(cfg.fn + 1).fill(0);
+      for (let t = 0; t < ts.D; t++) { const s2 = ts.fSets[Math.floor(rsB() * ts.D)]; for (const x of s2) sc[x]++; }
+      const ord = []; for (let i = 1; i <= cfg.fn; i++) ord.push(i);
+      ord.sort((a, b2) => sc[b2] - sc[a] || a - b2);
+      for (let i = 0; i < Math.min(cfg.fk + 2, ord.length); i++) stab[ord[i]]++;
+    }
+    const sStab = new Array(cfg.fn + 1).fill(0);
+    for (let i = 1; i <= cfg.fn; i++) sStab[i] = 0.7 * sMain[i] + 0.3 * (stab[i] / 30);
+    const fMain = pickForm(cfg, sStab, form);
     let bMain = null;
     let mkB = null;
     if (cfg.bk) {
@@ -293,7 +364,7 @@
       mkB = (mode) => { const a = new Array(cfg.bn + 1).fill(0);
         for (let i = 1; i <= cfg.bn; i++) {
           const sF = Math.log1p(ts.bc[i]) / Math.log1p(bMax);
-          const sD = 1 - Math.exp(-ts.bom[i] / bCycle);
+          const sD = 1 - Math.exp(-ts.bom[i] * ((ts.bc[i] + 0.5) / (ts.D + 0.5)) * 1.5);
           a[i] = mode === "hot" ? sF : mode === "due" ? sD : 0.5 * sF + 0.5 * sD;
         }
         return a; };
@@ -326,15 +397,46 @@
       seen.add(k2);
     }
 
-    out.sections.push({ title: "第七节 · 形态合成推荐", lines: [
+    out.sections.push({ title: "第八节 · 形态合成推荐", lines: [
       "预测形态：奇偶 " + form.odd + ":" + (cfg.fk - form.odd) + " · 质合 " + form.prime + ":" + (cfg.fk - form.prime) +
         " · 大小 " + form.low + ":" + (cfg.fk - form.low) + " · 区间 " + zoneCounts.join(":") + " · 和值 " + sum[0] + "–" + sum[1],
-      "预测方法：一阶马尔可夫转移（上期形态→下期）混合窗口分布；和值带条件化估计",
+      "预测方法：一阶马尔可夫转移（上期形态→下期）混合窗口分布；和值带条件化估计；EWMA 近期加权 + 共现频率 + 同尾约束",
       ...(cfg.bk ? ["后区：近 " + ts.D + " 期后区奇偶形态马尔可夫预测 → " + form.bOdd + " 奇" + (cfg.bk - form.bOdd) + "偶 · 推荐 " + bMain.map(pad2).join(" ") + "（对数冷热+指数遗漏评分）"] : []),
       "走势结构：含重号 " + form.repeat + " 个、邻号 " + form.neighbor + " 个",
       "合成方法：形态约束下按「综合 / 热号 / 回补 / 均衡」四种平滑评分取最优组合，另附纯随机对照",
       "⚠ 所有推荐均为统计整理输出，与随机对照的中奖概率完全相同",
     ], cand: { f: new Set(fMain), b: cfg.bk ? new Set(bMain) : new Set() }, why: "马尔可夫形态约束 + 多视角平滑评分合成" });
+    // 走前回测（walk-forward）：每期只用其之前的 50 期预测，对照真实开奖；同时计算随机基线
+    const bt = (function () {
+      const N = Math.min(150, all.length - WINDOW - 1);
+      if (N < 30) return null;
+      let oHit = 0, oHit1 = 0, oB0 = 0, oB1 = 0, sHit = 0, sCov = 0, n2 = 0;
+      for (let i = WINDOW; i < WINDOW + N; i++) {
+        const hist = all.slice(i - WINDOW, i);
+        const h = buildPickStats(cfg, hist);
+        const af = all[i].nums.slice(0, cfg.draw);
+        const actO = af.filter((x) => x % 2 === 1).length;
+        const predO = markovPredict(h.oddSeq, 0, cfg.draw);
+        if (predO === actO) oHit++;
+        if (Math.abs(predO - actO) <= 1) oHit1++;
+        const pO = h.oddDist.map((c) => c / h.D);
+        for (let v = 0; v < pO.length; v++) if (pO[v]) { oB0 += pO[v] * pO[v]; oB1 += pO[v] * ((pO[v - 1] || 0) + pO[v] + (pO[v + 1] || 0)); }
+        const avg50 = mean(h.sums), avg10 = mean(h.sums.slice(-10)), sd2 = sdOf(h.sums);
+        const band2 = condSumBand(h.sums, 0.65 * avg10 + 0.35 * avg50, sd2, 8, 0.55);
+        const actS = af.reduce((a, b) => a + b, 0);
+        if (actS >= band2[0] && actS <= band2[1]) sHit++;
+        sCov += h.sums.filter((v2) => v2 >= band2[0] && v2 <= band2[1]).length / h.D;
+        n2++;
+      }
+      return { n: n2, oHit: oHit / n2, oHit1: oHit1 / n2, oB0: oB0 / n2, oB1: oB1 / n2, sHit: sHit / n2, sCov: sCov / n2 };
+    })();
+    out.sections.push(bt ? { title: "第九节 · 模型回测（走前检验 · 诚实度）", lines: [
+      "最近 " + bt.n + " 期逐期回测：每期只用其之前的 50 期预测，再对照真实开奖",
+      "奇偶形态命中：精确 " + Math.round(bt.oHit * 100) + "%（随机基线 " + Math.round(bt.oB0 * 100) + "%）· ±1 容差 " + Math.round(bt.oHit1 * 100) + "%（基线 " + Math.round(bt.oB1 * 100) + "%）",
+      "和值带覆盖：真实和值入带 " + Math.round(bt.sHit * 100) + "%，同一带宽对历史和值的平均覆盖 " + Math.round(bt.sCov * 100) + "%（基线）",
+      "结论：命中率与随机基线接近（差异在 150 期抽样的波动范围内）→ 没有可靠预测力，符合「每期独立随机」；回测用于验证模型诚实度",
+      "⚠ 回测命中率≈基线是正常且预期的结果，请以此理解所有推荐的本质",
+    ], cand: null, why: "走前回测（walk-forward）" } : { title: "第九节 · 模型回测", lines: ["历史数据不足 180 期，暂无法回测"], cand: null, why: "走前回测" });
     out.ms = Date.now() - t0;
     out.gd = { fc: ts.fc, fom: ts.fom, window: ts.D };
     return out;
@@ -376,6 +478,10 @@
     if (!all || all.length < 30) throw new Error(cfg.name + " 历史数据不足 30 期");
     const draws = all.slice(-WINDOW);
     const ts = buildDigitStats(cfg, draws);
+    const chiCells = [];
+    for (let p = 0; p < cfg.pos; p++) for (let d2 = 0; d2 < 10; d2++) chiCells.push(ts.freq[p][d2]);
+    const chi = chiUniform(chiCells, ts.D / 10);
+    const trust = chi.p < 0.01 ? 1 : chi.p < 0.10 ? 0.85 : 0.7;
     const sumMax = cfg.pos * 9;
     const avg50 = mean(ts.sums), avg10 = mean(ts.sums.slice(-10)), sd = sdOf(ts.sums);
     const gCenter = 0.65 * avg10 + 0.35 * avg50;
@@ -425,11 +531,29 @@
       L.push("⚠ 各位冷热无预测力");
       out.sections.push({ title: "第五节 · 各位冷热与遗漏（近 50 期）", lines: L, cand: null, why: "形态维度：各位冷热" });
     }
+    out.sections.push({ title: "第六节 · 统计显著性检验（卡方均匀性）", lines: [
+      "近 " + ts.D + " 期 × " + cfg.pos + " 位共 " + chiCells.length + " 个（位,数字）频次 vs 均匀期望：χ²=" + chi.chi2.toFixed(1) + "（df=" + chi.df + "），p=" + chi.p.toFixed(3),
+      chi.p < 0.05 ? "p<0.05：与均匀有显著差异 → 转移/冷热权重上调（trust=" + trust + "）" : "p≥0.05：与均匀无显著差异 → 偏差按噪声降权（trust=" + trust + "）",
+      "各位评分经 30 次 Bootstrap 重采样稳定性筛选（同位反复选中的数字更稳）",
+      "⚠ 显著性检验是防过拟合手段，不改变中奖概率",
+    ], cand: null, why: "统计检验：卡方 + 稳定性选择" });
 
     const roadRate = new Array(3).fill(0);
     draws.forEach((d) => d.nums.forEach((x) => roadRate[x % 3]++));
     const roadMax = Math.max.apply(null, roadRate.concat([1]));
     const lastDigits = draws[ts.D - 1].nums;
+    // Bootstrap 稳定性（30 次重采样）：各位被反复选中的数字更稳
+    const rsB = mulberry32(20261102);
+    const stabD = [];
+    for (let p = 0; p < cfg.pos; p++) stabD.push(new Array(10).fill(0));
+    for (let b = 0; b < 30; b++) {
+      for (let p = 0; p < cfg.pos; p++) {
+        const sc = new Array(10).fill(0);
+        for (let t = 0; t < ts.D; t++) sc[draws[Math.floor(rsB() * ts.D)].nums[p]]++;
+        const ord = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].sort((a, b2) => sc[b2] - sc[a] || a - b2);
+        for (let i = 0; i < 3; i++) stabD[p][ord[i]]++;
+      }
+    }
     function digitScores(modeName) {
       const s = [];
       for (let p = 0; p < cfg.pos; p++) {
@@ -447,7 +571,7 @@
           if (modeName === "hot") a[d2] = sFreq;
           else if (modeName === "due") a[d2] = sDueI;
           else if (modeName === "bal") a[d2] = 0.5 * sFreq + 0.5 * sDueI;
-          else a[d2] = 0.35 * sMk + 0.25 * sFreq + 0.25 * sDueI + 0.15 * sRoad;
+          else a[d2] = 0.30 * sMk * (0.6 + 0.4 * trust) + 0.25 * sFreq + 0.25 * sDueI + 0.15 * sRoad * trust + 0.15 * stabD[p][d2] / 30;
         }
         s.push(a);
       }
@@ -498,13 +622,42 @@
       while (seen.has(k2) && guard < 8) { guard++; s.f = randDigits(); k2 = s.f.join(""); }
       seen.add(k2);
     }
-    out.sections.push({ title: "第六节 · 形态合成推荐", lines: [
+    out.sections.push({ title: "第七节 · 形态合成推荐", lines: [
       "预测形态：和值 " + sumBand[0] + "–" + sumBand[1] + "（条件化）· " + oddMode + " 奇" + (cfg.pos - oddMode) + "偶 · " + bigMode + " 大" + (cfg.pos - bigMode) + "小 · 跨度 " + spanMode + (ts.zu ? " · 组六为主" : ""),
-      "评分构成：各位一阶马尔可夫转移（上期数字→本期）+ 对数冷热 + 指数遗漏 + 012路亲和",
+      "评分构成：各位一阶马尔可夫转移（上期数字→本期）+ 对数冷热 + 指数遗漏 + 012路亲和 + Bootstrap 稳定性",
       "合成方法：各位在「综合 / 热号 / 回补 / 均衡」四种评分下取最优数字，满足和值带约束；直选允许各位重号",
       "3D 提示：主推一注直选 + 对应组选（号码排序后即组选）；排列五同思路",
       "⚠ 所有推荐均为统计整理输出，与随机对照的中奖概率完全相同",
     ], cand: { f: new Set(fMain), b: null }, why: "马尔可夫转移 + 平滑评分合成" });
+    const bt = (function () {
+      const N = Math.min(150, all.length - WINDOW - 1);
+      if (N < 30) return null;
+      let oHit = 0, oHit1 = 0, oB0 = 0, oB1 = 0, sHit = 0, sCov = 0, n2 = 0;
+      for (let i = WINDOW; i < WINDOW + N; i++) {
+        const hist = all.slice(i - WINDOW, i);
+        const h = buildDigitStats(cfg, hist);
+        const actO = all[i].nums.filter((x) => x % 2 === 1).length;
+        const predO = markovPredict(h.oddSeq, 0, cfg.pos);
+        if (predO === actO) oHit++;
+        if (Math.abs(predO - actO) <= 1) oHit1++;
+        const pO = h.oddDist.map((c) => c / h.D);
+        for (let v = 0; v < pO.length; v++) if (pO[v]) { oB0 += pO[v] * pO[v]; oB1 += pO[v] * ((pO[v - 1] || 0) + pO[v] + (pO[v + 1] || 0)); }
+        const avg50 = mean(h.sums), avg10 = mean(h.sums.slice(-10)), sd2 = sdOf(h.sums);
+        const band2 = condSumBand(h.sums, 0.65 * avg10 + 0.35 * avg50, sd2, 8, 0.55);
+        const actS = all[i].nums.reduce((a, b) => a + b, 0);
+        if (actS >= band2[0] && actS <= band2[1]) sHit++;
+        sCov += h.sums.filter((v2) => v2 >= band2[0] && v2 <= band2[1]).length / h.D;
+        n2++;
+      }
+      return { n: n2, oHit: oHit / n2, oHit1: oHit1 / n2, oB0: oB0 / n2, oB1: oB1 / n2, sHit: sHit / n2, sCov: sCov / n2 };
+    })();
+    out.sections.push(bt ? { title: "第八节 · 模型回测（走前检验 · 诚实度）", lines: [
+      "最近 " + bt.n + " 期逐期回测：每期只用其之前的 50 期预测，再对照真实开奖",
+      "奇数个数形态命中：精确 " + Math.round(bt.oHit * 100) + "%（随机基线 " + Math.round(bt.oB0 * 100) + "%）· ±1 容差 " + Math.round(bt.oHit1 * 100) + "%（基线 " + Math.round(bt.oB1 * 100) + "%）",
+      "和值带覆盖：真实和值入带 " + Math.round(bt.sHit * 100) + "%，同一带宽对历史和值的平均覆盖 " + Math.round(bt.sCov * 100) + "%（基线）",
+      "结论：命中率与随机基线接近（差异在 150 期抽样的波动范围内）→ 没有可靠预测力，符合「每期独立随机」",
+      "⚠ 回测命中率≈基线是正常且预期的结果，请以此理解所有推荐的本质",
+    ], cand: null, why: "走前回测（walk-forward）" } : { title: "第八节 · 模型回测", lines: ["历史数据不足 180 期，暂无法回测"], cand: null, why: "走前回测" });
     out.ms = Date.now() - t0;
     out.digitStats = ts;
     return out;

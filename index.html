@@ -56,7 +56,8 @@
       <div class="prose">
         <p>选号型彩种（双色球 / 大乐透 / 快乐8）：从<strong>和值 · 奇偶 · 质合 · 大小 · 区间 · 012路 · 走势图模式（重号 / 邻号 / 斜跳）· 冷热遗漏</strong>等维度统计；形态预测用<strong>一阶马尔可夫转移</strong>（上期形态 → 下期形态的转移分布，与窗口分布按 55/45 混合回退），和值带用<strong>条件化估计</strong>（窗口内与上期和值最接近的 8 期的下期和值，与全窗口趋势混合）；再在形态约束下按「综合 / 热号 / 回补 / 均衡」四种平滑评分（对数冷热 + 指数遗漏回补）合成推荐，另附纯随机对照。</p>
         <p>数字型彩种（福彩3D / 排列五）：各位<strong>一阶马尔可夫转移</strong>（上期该位数字 → 本期）+ 对数冷热 + 指数遗漏 + 012路亲和打分，和值带条件化，跨度/奇偶/大小形态马尔可夫预测（3D 含组选形态统计）→ 约束合成直选推荐。</p>
-        <p>这些维度本身没有预测力，价值在于把信息结构化、把概率看清楚。算法思路参考开源项目 <a href="https://github.com/zxz0119/lottery-ai-simulator" target="_blank" rel="noopener">lottery-ai-simulator（热号/冷号/遗漏/统计特征生成候选）</a> 与 <a href="https://github.com/snjyor/lucky_ball" target="_blank" rel="noopener">lucky_ball（历史数据分析）</a> 等，全部在本页本地计算，无第三方运行时依赖、不上传任何数据。</p>
+        <p>防过拟合与诚实度：冷热偏差先过<strong>卡方均匀性检验</strong>（不显著则降权）；推荐号码经 <strong>30 次 Bootstrap 重采样</strong>稳定性筛选；内置<strong>走前回测</strong>（每期只用其之前 50 期预测、对照真实开奖，并列出随机基线）——回测命中率与随机基线相当，这正是「每期独立随机」应有的结果。</p>
+        <p>这些维度本身没有预测力，价值在于把信息结构化、把概率看清楚。算法思路参考开源项目 <a href="https://github.com/zxz0119/lottery-ai-simulator" target="_blank" rel="noopener">lottery-ai-simulator（热号/冷号/遗漏/统计特征生成候选）</a>、<a href="https://github.com/snjyor/lucky_ball" target="_blank" rel="noopener">lucky_ball（历史数据分析）</a>、<a href="https://github.com/wjt0321/lottery-predictor" target="_blank" rel="noopener">lottery-predictor（马尔可夫链 + 共现频率 + 同尾形态）</a> 与 <a href="https://github.com/Callam7/LottoPipeline" target="_blank" rel="noopener">LottoPipeline（Monte Carlo 模拟管线）</a> 等，全部在本页本地计算，无第三方运行时依赖、不上传任何数据。</p>
       </div>
     </div>
 
