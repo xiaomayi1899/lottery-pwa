@@ -192,7 +192,7 @@
     const fc = new Array(cfg.fn + 1).fill(0);
     const fom = new Array(cfg.fn + 1).fill(D);
     for (let t = D - 1; t >= 0; t--) {
-      for (let i = 0; i < cfg.fk && i < draws[t].nums.length; i++) {
+      for (let i = 0; i < cfg.draw && i < draws[t].nums.length; i++) {
         const n = draws[t].nums[i];
         if (n >= 1 && n <= cfg.fn) { fc[n]++; if (fom[n] === D) fom[n] = D - 1 - t; }
       }

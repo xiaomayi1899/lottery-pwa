@@ -1,10 +1,9 @@
-/* engine.v6.js — 数字彩推荐引擎 v6.2（参考开源思路：zxz0119/lottery-ai-simulator、snjyor/lucky_ball）
+/* engine.v6.js — 数字彩推荐引擎 v6.3（参考开源思路，致谢见下方与说明页）
    彩种：双色球 / 大乐透 / 快乐8 / 福彩3D / 排列五，统一「近 50 期走势形态」框架。
-   v6.2 算法升级（相对 v6/v5 的纯众数形态）：
-   · 形态预测：一阶马尔可夫转移（上期形态 → 下期形态）+ 窗口分布按 55/45 混合回退，替代单一众数
-   · 和值带：条件化估计（窗口内与上期和值最接近的 8 期的下期和值）与全窗口趋势中心混合
-   · 评分平滑：冷热取对数（抑制极端热度独大）、遗漏改指数衰减（平滑回补强度）；
-     数字型各位加入「上期数字 → 本期」一阶转移与 012 路亲和（替换原恒定项）
+   v6.2：一阶马尔可夫转移形态预测（55/45 混合回退）· 条件化和值带 · 对数冷热 + 指数遗漏平滑评分
+   v6.3（开源方法落地）：共现频率矩阵（wjt0321/lottery-predictor）· 同尾号软约束（同上）·
+     EWMA 近期加权 · 卡方均匀性检验 trust 降权防过拟合 · Bootstrap 稳定性选择（Callam7/LottoPipeline 的
+     Monte Carlo 思路）· 走前回测 walk-forward 与随机基线并列展示
    郑重声明：开奖为独立随机事件，以上只是更规范的统计整理，任何算法都不能提高中奖概率。 */
 (function (global) {
   "use strict";
@@ -300,7 +299,7 @@
       "重号：场均 " + mean(ts.repeats).toFixed(2) + "（随机期望 " + (cfg.fk * cfg.draw / cfg.fn).toFixed(2) + "），马尔可夫预测 " + form.repeat + " 个",
       "邻号（±1）：场均 " + mean(ts.neighbors).toFixed(2) + "；斜跳（±2）：场均 " + mean(ts.jumps).toFixed(2),
       "同尾号（尾数相同）：场均 " + mean(ts.fSets.map((s) => { const t = {}; let c = 0; for (const x of s) { t[x % 10] = (t[x % 10] || 0) + 1; if (t[x % 10] >= 2) c++; } return c; })).toFixed(2) + " 个（推荐中同尾 >2 做软惩罚）",
-      "上期开：" + fmtArr(draws[draws.length - 1].nums.slice(0, cfg.fk)) + " → 预测含重号 " + form.repeat + " / 邻号 " + form.neighbor,
+      "上期开：" + fmtArr(draws[draws.length - 1].nums.slice(0, cfg.draw)) + " → 预测含重号 " + form.repeat + " / 邻号 " + form.neighbor,
       "⚠ 重号/邻号频率≈随机水平，无预测力",
     ], cand: null, why: "形态维度：走势模式" });
     {
