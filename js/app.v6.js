@@ -147,9 +147,11 @@
     const cfg = GAMES[g];
     const auto = cfg.fk >= 8 ? "sm" : "";
     const cls = size || auto;
+    const cut = cfg.draw || (nums || []).length; // pick 型：前 draw 个为前区（红），其余后区（蓝）
     let h = "";
-    (nums || []).forEach((n) => {
-      h += '<span class="ball r' + (cls ? " " + cls : "") + '">' + Engine.pad2(n) + "</span>";
+    (nums || []).forEach((n, i) => {
+      if (cfg.draw && i === cut) h += '<span class="vs">+</span>';
+      h += '<span class="ball ' + (i >= cut ? "b" : "r") + (cls ? " " + cls : "") + '">' + Engine.pad2(n) + "</span>";
     });
     return h;
   }
@@ -248,11 +250,12 @@
     } else {
       formLine = "预测形态：奇偶 " + r.form.odd + " · 质合 " + r.form.prime + " · 大小 " + r.form.low +
         " · 区间 " + r.form.zone + " · 和值 " + r.form.sum[0] + "–" + r.form.sum[1] +
-        (cfg.fk <= 6 ? " · 含重号 " + r.form.repeat + " / 邻号 " + r.form.neighbor : "");
+        (cfg.fk <= 6 ? " · 含重号 " + r.form.repeat + " / 邻号 " + r.form.neighbor : "") +
+        (r.form.back ? " · 后区奇偶 " + r.form.back : "");
     }
     return '<div class="banner">' +
       '<div class="tag">形态合成推荐 · ' + esc(r.name) + "</div>" +
-      '<div class="pick">' + gameBalls(g, r.final.f) + "</div>" +
+      '<div class="pick">' + gameBalls(g, r.final.f.concat(r.final.b || [])) + "</div>" +
       '<div class="votes num">' + esc(formLine) + "</div>" +
       '<div class="upto">截至第 ' + esc(r.upto.issue) + " 期（" + esc(r.upto.date) + " 开奖）· 分析最近 " + r.upto.count +
       " 期走势 · 计算 " + r.ms + "ms<br>" +
@@ -265,7 +268,7 @@
     let h = '<div class="card"><div class="eyebrow">策略五注 · 同一预测形态的不同评分视角</div>';
     st.result.sets.forEach((s, i) => {
       h += '<div class="pr-row"><div class="pr-l"><span>' + (i + 1) + ". " + esc(s.tag) + "</span></div>" +
-        '<div class="balls" style="margin:4px 0 2px">' + gameBalls(g, s.f, "xs") + "</div></div>";
+        '<div class="balls" style="margin:4px 0 2px">' + gameBalls(g, s.f.concat(s.b || []), "xs") + "</div></div>";
     });
     h += '<div class="hint" style="margin-top:8px">五注都满足同一预测形态，只是选号评分视角不同；随机对照与其他四注的中奖概率完全相同。</div></div>';
     return h;
@@ -322,8 +325,8 @@
       '<div class="balls" style="margin-top:12px">' + gameBalls(g, last.nums) + "</div></div>";
     h += '<div class="card"><div class="eyebrow">近 50 期走势形态 · 推荐合成</div>' +
       '<div class="hint">' + (cfg.type === "digits"
-        ? "只用最近 50 期：各位走势 / 和值 / 奇偶大小 / 012路 / 跨度" + (g === "fc3d" ? " / 组选形态" : "") + " → 预测下期形态 → 形态约束下按四种评分视角合成直选，另附纯随机对照。"
-        : "只用最近 50 期：和值 / 奇偶 / 质合 / 大小 / 区间 / 012路 / 走势图模式（重号·邻号·斜跳）/ 冷热遗漏 → 预测下期形态 → 形态约束下按四种评分视角合成，另附纯随机对照。") + "</div>" +
+        ? "只用最近 50 期：各位走势 / 一阶马尔可夫转移 / 和值条件区间 / 奇偶大小 / 012路 / 跨度" + (g === "fc3d" ? " / 组选形态" : "") + " → 形态约束下按四种平滑评分合成直选，另附纯随机对照。"
+        : "只用最近 50 期：和值（条件化）/ 奇偶 / 质合 / 大小 / 区间 / 012路 / 重号邻号斜跳 / 冷热遗漏 → 一阶马尔可夫转移预测下期形态 → 形态约束下按四种平滑评分合成，另附纯随机对照。") + "</div>" +
       '<div class="btn-row"><button class="btn ghost" data-act="refresh">更新数据</button>' +
       '<button class="btn primary" data-act="go" id="' + g + '-go">' + (st.result ? "重新分析" : "开始分析") + "</button></div>" +
       '<div class="hint" id="' + g + '-prog" style="margin-top:8px;min-height:16px">' + (st.running ? "近 50 期走势形态分析中…" : "") + "</div></div>";
