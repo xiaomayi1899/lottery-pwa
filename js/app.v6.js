@@ -178,8 +178,9 @@
     }
     if (!list) {
       if (store[g].list.length) setNet("ok", "官方接口未响应 · 使用本地数据");
+      else if (g === "p5") setNet("", "排列五 官方暂无公开接口 · 其余彩种正常");
       else setNet("err", GAMES[g].name + " 数据源暂不可用");
-      if (!silent) toast(GAMES[g].name + "更新失败：所有数据来源均不可达");
+      if (!silent) toast(GAMES[g].name + (g === "p5" ? "官方暂无公开数据接口（已知限制）" : "更新失败：所有数据来源均不可达"));
       return false;
     }
     const cur = store[g].list;
@@ -390,7 +391,8 @@
     const el = $("#page-" + g);
     let h = "";
     if (!s.list.length) {
-      h += '<div class="state-box"><strong>' + esc(cfg.name) + ' 数据未就绪</strong>从官方接口获取历史开奖后即可开始分析' +
+      const p5note = g === "p5" ? '<div class="hint" style="margin-top:8px">体彩官方未提供排列五公开数据接口（已全量排查），接口开放后此页自动可用；其余四个彩种不受影响。</div>' : "";
+      h += '<div class="state-box"><strong>' + esc(cfg.name) + (g === "p5" ? " 官方暂无公开数据接口" : " 数据未就绪") + "</strong>" + (g === "p5" ? "" : "从官方接口获取历史开奖后即可开始分析") + p5note +
         '<div><button class="btn primary" data-act="refresh">获取数据</button></div></div>';
       el.innerHTML = h;
       st.rendered = true;
