@@ -47,6 +47,61 @@
     } catch (e) {}
   }
 
+  /* ============ 推荐存档与开奖核对（只存本机浏览器） ============ */
+  const RECO_KEY = "lph_reco_v1";
+  let reco = loadReco();
+  function loadReco() {
+    try { const o = JSON.parse(localStorage.getItem(RECO_KEY) || "null"); if (o && typeof o === "object") return o; } catch (e) {}
+    return {};
+  }
+  function saveRecoStore() { try { localStorage.setItem(RECO_KEY, JSON.stringify(reco)); } catch (e) {} }
+  function recoList(g) { if (!Array.isArray(reco[g])) reco[g] = []; return reco[g]; }
+
+  function saveReco(g, res) {
+    const isD = GAMES[g].type === "digits";
+    const list = recoList(g);
+    const basedOn = String(store[g].list[store[g].list.length - 1].issue);
+    const sets = res.sets.map((s) => ({ tag: s.tag,
+      f: isD ? s.f.slice() : s.f.slice().sort((a, b) => a - b),
+      b: s.b ? s.b.slice().sort((a, b) => a - b) : null }));
+    const last = list[0];
+    if (last && !last.gr && last.basedOn === basedOn) { last.sets = sets; last.t = Date.now(); }
+    else list.unshift({ t: Date.now(), basedOn: basedOn, sets: sets, gr: null });
+    if (list.length > 12) list.length = 12;
+    saveRecoStore();
+  }
+
+  function gradeRecords(g) {
+    const cfg = GAMES[g];
+    const list = recoList(g);
+    const draws = store[g].list;
+    if (!draws.length) return 0;
+    let graded = 0;
+    for (const r of list) {
+      if (r.gr) continue;
+      const bo = Number(r.basedOn);
+      let act = null;
+      for (const d of draws) { if (Number(d.issue) > bo) { act = d; break; } }
+      if (!act) continue;
+      const front = act.nums.slice(0, cfg.draw);
+      const back = cfg.bk ? act.nums.slice(cfg.draw) : null;
+      const rows = r.sets.map((s) => {
+        if (cfg.type === "digits") {
+          let pos = 0;
+          for (let p = 0; p < cfg.pos; p++) if (s.f[p] === act.nums[p]) pos++;
+          return { tag: s.tag, pos: pos };
+        }
+        const hits = s.f.filter((x) => front.indexOf(x) >= 0).length;
+        const bh = s.b ? s.b.filter((x) => back.indexOf(x) >= 0).length : null;
+        return { tag: s.tag, hits: hits, bh: bh };
+      });
+      r.gr = { issue: String(act.issue), date: String(act.date).slice(0, 10), rows: rows };
+      graded++;
+    }
+    if (graded) saveRecoStore();
+    return graded;
+  }
+
   function setNet(cls, label) {
     const dot = $("#netdot"), lab = $("#netlabel");
     if (dot) dot.className = "netdot" + (cls ? " " + cls : "");
@@ -134,8 +189,9 @@
     window.DATA[g] = list;
     persist();
     setNet("ok", "官方数据已连接");
+    const graded = gradeRecords(g);
     if (state[g].rendered) {
-      if (lastNew !== lastOld) renderGame(g);
+      if (lastNew !== lastOld || graded) renderGame(g);
       else updateFreshBadge(g);
     }
     if (!silent) toast(GAMES[g].name + "已更新至第 " + lastNew + " 期");
@@ -274,6 +330,30 @@
     return h;
   }
 
+  function recoCardHTML(g) {
+    const cfg = GAMES[g];
+    const list = recoList(g);
+    if (!list.length) return "";
+    const expF = (cfg.type === "digits" ? cfg.pos / 10 : cfg.fk * cfg.draw / cfg.fn).toFixed(1);
+    const expB = cfg.bk ? (cfg.bk * cfg.bk / cfg.bn).toFixed(1) : null;
+    let h = '<div class="card"><div class="eyebrow">推荐存档核对（开奖后自动回填）</div>';
+    for (const r of list.slice(0, 8)) {
+      if (r.gr) {
+        const parts = r.gr.rows.map((row) => {
+          if (row.pos != null) return esc(row.tag) + " 命中 " + row.pos + "/" + cfg.pos + " 位";
+          return esc(row.tag) + " 命中 " + row.hits + " 个" + (row.bh == null ? "" : (row.bh > 0 ? "＋后区" : ""));
+        });
+        h += '<div class="hint mono">基于第' + esc(r.basedOn) + "期 → 实开第" + esc(r.gr.issue) + "期（" + esc(r.gr.date) + "）：" + parts.join(" · ") + "</div>";
+      } else {
+        h += '<div class="hint mono">基于第' + esc(r.basedOn) + "期分析 · 待下期开奖核对（" + r.sets.length + " 注已存档）</div>";
+      }
+    }
+    h += '<div class="hint" style="margin-top:8px">随机期望命中：' + (cfg.type === "digits" ? "各位直选 " : "号码 ") + expF +
+      (expB ? " · 后区 " + expB : "") + " 个——长期看，存档命中率会贴近这个期望，这正是「开奖随机」的直观验证。存档只存在本机浏览器。</div>" +
+      '<div class="btn-row"><button class="btn ghost" data-act="clearreco">清空本彩种存档</button></div></div>';
+    return h;
+  }
+
   function stepsHTML(g) {
     const r = state[g].result;
     let h = '<div style="margin-top:14px"><div class="eyebrow">走势明细（点开查看）</div></div>';
@@ -336,6 +416,7 @@
     }
     h += statsCardHTML(g);
     if (st.result) h += stepsHTML(g);
+    h += recoCardHTML(g);
     h += histHTML(g);
     el.innerHTML = h;
     st.rendered = true;
@@ -355,6 +436,7 @@
       const res = Engine.analyzeGame(g);
       res.ms = Math.round(performance.now() - t0);
       st.result = res;
+      saveReco(g, res);
       st.running = false;
       renderGame(g);
       toast(GAMES[g].name + "走势分析完成，用时 " + res.ms + "ms");
@@ -375,6 +457,7 @@
         if (act === "refresh") refreshGame(g, false);
         else if (act === "go") runAnalysis(g);
         else if (act === "metric") { state[g].metric = t.dataset.m; renderGame(g); }
+        else if (act === "clearreco") { reco[g] = []; saveRecoStore(); renderGame(g); toast(GAMES[g].name + " 存档已清空"); }
         return;
       }
       if (ev.target.closest("summary")) {
@@ -406,6 +489,7 @@
 
   function boot() {
     loadLocal();
+    KEYS.forEach((g) => gradeRecords(g));
     for (const g of KEYS) bindGamePage(g);
     for (const g of KEYS) renderGame(g);
     $$(".tab-btn").forEach((b) => b.addEventListener("click", () => switchPage(b.dataset.page)));

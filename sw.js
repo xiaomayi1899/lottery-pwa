@@ -1,7 +1,7 @@
 /* sw.js — v4：HTML/脚本/样式「在线优先、离线回退缓存」（更新即时生效）；
    图标/清单缓存优先；接口网络优先 + 运行时缓存兜底。
    注意：Service Worker 仅在 https 或 localhost 下注册。 */
-const VER = "lph-v6c-20261109";
+const VER = "lph-v6d-20261109";
 const SHELL_CACHE = "lph-shell-" + VER;
 const API_CACHE = "lph-api-" + VER;
 const SHELL = [
